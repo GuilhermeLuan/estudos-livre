@@ -16,6 +16,12 @@ export async function listSubjects(status: SubjectStatus): Promise<Subject[]> {
   return response.json() as Promise<Subject[]>;
 }
 
+export async function getSubject(id: string): Promise<Subject> {
+  const response = await apiFetch(`/api/subjects/${id}`);
+  await requireSuccess(response, "Não foi possível consultar a matéria.");
+  return response.json() as Promise<Subject>;
+}
+
 export async function createSubject(name: string): Promise<Subject> {
   const response = await apiFetch("/api/subjects", {
     method: "POST",

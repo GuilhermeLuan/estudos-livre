@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useForm } from "react-hook-form";
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   AuthSnapshot,
@@ -12,7 +13,16 @@ import {
   login,
   logout
 } from "./auth-api";
-import { archiveSubject, createSubject, listSubjects, restoreSubject, Subject, SubjectStatus, updateSubject } from "./subject-api";
+import { archiveSubject, createSubject, getSubject, listSubjects, restoreSubject, Subject, SubjectStatus, updateSubject } from "./subject-api";
+import {
+  archiveContent,
+  ContentStatus,
+  createContent,
+  listContents,
+  restoreContent,
+  StudyContent,
+  updateContent
+} from "./content-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -40,6 +50,15 @@ function SubjectsIcon() {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M5 4.5h10a3 3 0 0 1 3 3V20H8a3 3 0 0 0-3 3V4.5Z" />
       <path d="M5 4.5A2.5 2.5 0 0 0 2.5 7v13A2.5 2.5 0 0 0 5 22M9 9h5M9 13h5" />
+    </svg>
+  );
+}
+
+function ContentsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 3.5h12v17H6z" />
+      <path d="M9 8h6M9 12h6M9 16h4" />
     </svg>
   );
 }
@@ -247,6 +266,7 @@ function SubjectRow({ subject }: { subject: Subject }) {
             <p>{subject.archived ? "Arquivada — fora dos seletores de estudo" : "Ativa no catálogo"}</p>
           </div>
           <div className="row-actions">
+            <Link className="text-button row-link" to={`/materias/${subject.id}/conteudos`}>Ver conteúdos</Link>
             <button className="text-button" type="button" aria-label={`Editar ${subject.name}`} onClick={() => setEditing(true)}>Editar</button>
             {subject.archived ? (
               <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${subject.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Restaurando…" : "Restaurar"}</button>
@@ -261,6 +281,272 @@ function SubjectRow({ subject }: { subject: Subject }) {
             )}
           </div>
           {stateMutation.isError && <p className="form-error row-error" role="alert">{stateMutation.error instanceof ApiError ? stateMutation.error.message : "Não foi possível alterar o estado da matéria."}</p>}
+        </>
+      )}
+    </article>
+  );
+}
+
+function ProtectedContentsPage() {
+  const { subjectId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [status, setStatus] = useState<ContentStatus>("active");
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<{ name: string }>({
+    defaultValues: { name: "" }
+  });
+  const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
+  const subject = useQuery({
+    queryKey: ["subject", subjectId],
+    queryFn: () => getSubject(subjectId),
+    enabled: auth.data?.state === "authenticated" && Boolean(subjectId)
+  });
+  const contents = useQuery({
+    queryKey: ["contents", subjectId, status],
+    queryFn: () => listContents(subjectId, status),
+    enabled: subject.isSuccess,
+    staleTime: 30_000
+  });
+  const createMutation = useMutation({
+    mutationFn: ({ name }: { name: string }) => createContent(subjectId, name),
+    onSuccess: (created) => {
+      queryClient.setQueryData<StudyContent[]>(["contents", subjectId, "active"], (current = []) =>
+        [...current, created].sort((first, second) =>
+          first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+      );
+      reset();
+      setShowCreate(false);
+    }
+  });
+
+  if (auth.isPending) {
+    return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
+  }
+  if (auth.isError || auth.data?.state !== "authenticated") {
+    return <Navigate to="/" replace />;
+  }
+
+  return (
+    <AppShell authenticated activeSection="subjects" topbarMeta="Catálogo de conteúdos">
+      <main className="content subjects-content content-catalog-content">
+        {subject.isPending && (
+          <section className="content-context loading-card" aria-busy="true">
+            <span className="skeleton skeleton-title" />
+            <span className="skeleton skeleton-line" />
+          </section>
+        )}
+        {subject.isError && (
+          <section className="subjects-error" role="alert">
+            <span className="subject-bookmark error-bookmark" aria-hidden="true"><ContentsIcon /></span>
+            <div><h1>Matéria não encontrada</h1><p>Ela pode ter sido removida ou pertencer a outra conta.</p></div>
+            <Link className="secondary-button" to="/materias">Voltar para matérias</Link>
+          </section>
+        )}
+        {subject.data && (
+          <>
+            <Link className="catalog-back-link" to="/materias">← Voltar para matérias</Link>
+            <div className="page-heading subjects-heading content-heading">
+              <div>
+                <span className="eyebrow">Conteúdos da matéria</span>
+                <h1>Conteúdos de {subject.data.name}</h1>
+                <p>
+                  Organize os assuntos que você estuda nesta matéria.
+                  {subject.data.archived && <span className="archived-context"> Matéria arquivada.</span>}
+                </p>
+              </div>
+              <button className="primary-button" type="button" onClick={() => setShowCreate(true)} disabled={showCreate}>Novo conteúdo</button>
+            </div>
+            {showCreate && (
+              <section className="subject-composer content-composer" aria-labelledby="new-content-title">
+                <div>
+                  <span className="card-kicker">Novo tópico</span>
+                  <h2 id="new-content-title">Adicione um conteúdo</h2>
+                  <p>Use o nome do assunto como ele aparece no seu material ou edital.</p>
+                </div>
+                <form className="subject-form" onSubmit={handleSubmit((values) => createMutation.mutate(values))}>
+                  <label>
+                    Nome do conteúdo
+                    <input
+                      autoFocus
+                      maxLength={120}
+                      {...register("name", {
+                        required: "Informe o nome do conteúdo.",
+                        validate: (value) => value.trim().length > 0 || "Informe o nome do conteúdo."
+                      })}
+                    />
+                  </label>
+                  {errors.name?.message && <p className="field-error">{errors.name.message}</p>}
+                  {createMutation.isError && (
+                    <p className="form-error" role="alert">
+                      {createMutation.error instanceof ApiError ? createMutation.error.message : "Não foi possível criar o conteúdo."}
+                    </p>
+                  )}
+                  <div className="form-actions">
+                    <button className="secondary-button" type="button" onClick={() => { reset(); setShowCreate(false); }}>Cancelar</button>
+                    <button className="primary-button" type="submit" disabled={createMutation.isPending}>
+                      {createMutation.isPending ? "Adicionando…" : "Adicionar conteúdo"}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            )}
+            <div className="catalog-tabs" role="tablist" aria-label="Estado dos conteúdos">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={status === "active"}
+                className={status === "active" ? "selected" : ""}
+                onClick={() => { setStatus("active"); setShowCreate(false); reset(); }}
+              >
+                Ativos
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={status === "archived"}
+                className={status === "archived" ? "selected" : ""}
+                onClick={() => { setStatus("archived"); setShowCreate(false); reset(); }}
+              >
+                Arquivados
+              </button>
+            </div>
+            {contents.isPending && (
+              <section className="subjects-loading" aria-busy="true" aria-live="polite">
+                {[0, 1, 2].map((item) => <span className="subject-row-skeleton skeleton" key={item} />)}
+                <span className="sr-only">Carregando conteúdos</span>
+              </section>
+            )}
+            {contents.isError && (
+              <section className="subjects-error" role="alert">
+                <span className="subject-bookmark error-bookmark" aria-hidden="true"><ContentsIcon /></span>
+                <div>
+                  <h2>Os conteúdos não puderam ser abertos</h2>
+                  <p>Verifique a conexão com sua instalação e tente novamente.</p>
+                </div>
+                <button className="secondary-button" type="button" onClick={() => void contents.refetch()}>Tentar novamente</button>
+              </section>
+            )}
+            {contents.data?.length === 0 && !showCreate && (
+              <section className="subjects-empty content-empty">
+                <span className="empty-bookmark" aria-hidden="true"><ContentsIcon /></span>
+                <h2>{status === "active" ? "Adicione o primeiro conteúdo" : "Nenhum conteúdo arquivado"}</h2>
+                <p>
+                  {status === "active"
+                    ? "Transforme os tópicos desta matéria em unidades claras para seus próximos ciclos de estudo."
+                    : "Quando você arquivar um conteúdo, poderá encontrá-lo e restaurá-lo aqui."}
+                </p>
+                {status === "active" && (
+                  <button className="secondary-button" type="button" onClick={() => setShowCreate(true)}>Adicionar conteúdo</button>
+                )}
+              </section>
+            )}
+            {contents.data && contents.data.length > 0 && (
+              <section className="subject-list content-list" aria-label={status === "active" ? "Conteúdos ativos" : "Conteúdos arquivados"}>
+                {contents.data.map((content) => <ContentRow key={content.id} content={content} />)}
+              </section>
+            )}
+          </>
+        )}
+      </main>
+    </AppShell>
+  );
+}
+
+function ContentRow({ content }: { content: StudyContent }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const { register, handleSubmit, reset, formState: { errors } } = useForm<{ name: string }>({
+    defaultValues: { name: content.name }
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ name }: { name: string }) => updateContent(content.subjectId, content.id, name),
+    onSuccess: (updated) => {
+      const status = updated.archived ? "archived" : "active";
+      queryClient.setQueryData<StudyContent[]>(["contents", content.subjectId, status], (current = []) =>
+        current.map((item) => item.id === updated.id ? updated : item)
+          .sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+      );
+      reset({ name: updated.name });
+      setEditing(false);
+    }
+  });
+  const stateMutation = useMutation({
+    mutationFn: () => content.archived
+      ? restoreContent(content.subjectId, content.id)
+      : archiveContent(content.subjectId, content.id),
+    onSuccess: (updated) => {
+      const sourceStatus: ContentStatus = content.archived ? "archived" : "active";
+      const destinationStatus: ContentStatus = updated.archived ? "archived" : "active";
+      queryClient.setQueryData<StudyContent[]>(["contents", content.subjectId, sourceStatus], (current = []) =>
+        current.filter((item) => item.id !== updated.id)
+      );
+      queryClient.setQueryData<StudyContent[]>(["contents", content.subjectId, destinationStatus], (current = []) =>
+        [...current.filter((item) => item.id !== updated.id), updated]
+          .sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+      );
+      setConfirmingArchive(false);
+    }
+  });
+
+  return (
+    <article className="subject-row content-row">
+      <span className="subject-bookmark content-bookmark" aria-hidden="true"><ContentsIcon /></span>
+      {editing ? (
+        <form className="subject-edit-form content-edit-form" onSubmit={handleSubmit((values) => updateMutation.mutate(values))}>
+          <label>
+            Editar nome do conteúdo
+            <input
+              autoFocus
+              maxLength={120}
+              {...register("name", {
+                required: "Informe o nome do conteúdo.",
+                validate: (value) => value.trim().length > 0 || "Informe o nome do conteúdo."
+              })}
+            />
+          </label>
+          {errors.name?.message && <p className="field-error">{errors.name.message}</p>}
+          {updateMutation.isError && (
+            <p className="form-error" role="alert">
+              {updateMutation.error instanceof ApiError ? updateMutation.error.message : "Não foi possível atualizar o conteúdo."}
+            </p>
+          )}
+          <div className="row-actions">
+            <button className="text-button" type="button" onClick={() => { reset({ name: content.name }); setEditing(false); }}>Cancelar</button>
+            <button className="primary-button compact-button" type="submit" disabled={updateMutation.isPending}>
+              {updateMutation.isPending ? "Salvando…" : "Salvar alteração"}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <div className="subject-row-copy">
+            <h2>{content.name}</h2>
+            <p>{content.archived ? "Arquivado — preservado nesta matéria" : "Ativo nesta matéria"}</p>
+          </div>
+          <div className="row-actions">
+            <button className="text-button" type="button" aria-label={`Editar ${content.name}`} onClick={() => setEditing(true)}>Editar</button>
+            {content.archived ? (
+              <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${content.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>
+                {stateMutation.isPending ? "Restaurando…" : "Restaurar"}
+              </button>
+            ) : confirmingArchive ? (
+              <span className="archive-confirmation">
+                <span>Arquivar?</span>
+                <button className="text-button" type="button" onClick={() => setConfirmingArchive(false)}>Cancelar</button>
+                <button className="danger-button" type="button" aria-label="Confirmar arquivamento" onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>
+                  {stateMutation.isPending ? "Arquivando…" : "Confirmar"}
+                </button>
+              </span>
+            ) : (
+              <button className="text-button archive-action" type="button" aria-label={`Arquivar ${content.name}`} onClick={() => setConfirmingArchive(true)}>Arquivar</button>
+            )}
+          </div>
+          {stateMutation.isError && (
+            <p className="form-error row-error" role="alert">
+              {stateMutation.error instanceof ApiError ? stateMutation.error.message : "Não foi possível alterar o estado do conteúdo."}
+            </p>
+          )}
         </>
       )}
     </article>
@@ -610,6 +896,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<CredentialHome />} />
         <Route path="/materias" element={<ProtectedSubjectsPage />} />
+        <Route path="/materias/:subjectId/conteudos" element={<ProtectedContentsPage />} />
         <Route path="/conta" element={<ProtectedAccountPage />} />
         <Route path="/redefinir-senha" element={<PasswordResetPage />} />
       </Routes>

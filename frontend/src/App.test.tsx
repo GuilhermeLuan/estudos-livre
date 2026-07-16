@@ -258,6 +258,171 @@ describe("authentication journey", () => {
     expect(await screen.findByText("Matemática")).toBeVisible();
   });
 
+  it("opens the selected subject content catalog", async () => {
+    const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
+    window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: "user",
+        email: "pessoa@example.com",
+        timeZone: "America/Sao_Paulo"
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: subjectId,
+        name: "Língua Portuguesa",
+        archived: false,
+        createdAt: "2026-07-16T12:00:00Z",
+        updatedAt: "2026-07-16T12:00:00Z"
+      }))
+      .mockResolvedValueOnce(jsonResponse([{
+        id: "017e2d9a-6082-4aee-a3f4-3b43029efc13",
+        subjectId,
+        name: "Concordância verbal",
+        archived: false,
+        createdAt: "2026-07-16T12:00:00Z",
+        updatedAt: "2026-07-16T12:00:00Z"
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Conteúdos de Língua Portuguesa" })).toBeVisible();
+    expect(await screen.findByText("Concordância verbal")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Novo conteúdo" })).toBeEnabled();
+  });
+
+  it("creates content inside the selected subject without reloading the application", async () => {
+    const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
+    window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);
+    document.cookie = "XSRF-TOKEN=token-conteudo; Path=/";
+    const created = {
+      id: "017e2d9a-6082-4aee-a3f4-3b43029efc13",
+      subjectId,
+      name: "Concordância verbal",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: subjectId,
+        name: "Língua Portuguesa",
+        archived: false,
+        createdAt: "2026-07-16T12:00:00Z",
+        updatedAt: "2026-07-16T12:00:00Z"
+      }))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(created, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Novo conteúdo" }));
+    fireEvent.change(screen.getByLabelText("Nome do conteúdo"), {
+      target: { value: "Concordância verbal" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar conteúdo" }));
+
+    expect(await screen.findByText("Concordância verbal")).toBeVisible();
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/subjects/${subjectId}/contents`,
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("renames, archives and restores content without leaving the subject", async () => {
+    const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
+    const contentId = "017e2d9a-6082-4aee-a3f4-3b43029efc13";
+    window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);
+    const original = {
+      id: contentId,
+      subjectId,
+      name: "Concordância",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const renamed = { ...original, name: "Concordância verbal" };
+    const archived = { ...renamed, archived: true };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: subjectId,
+        name: "Língua Portuguesa",
+        archived: false,
+        createdAt: "2026-07-16T12:00:00Z",
+        updatedAt: "2026-07-16T12:00:00Z"
+      }))
+      .mockResolvedValueOnce(jsonResponse([original]))
+      .mockResolvedValueOnce(jsonResponse(renamed))
+      .mockResolvedValueOnce(jsonResponse(archived))
+      .mockResolvedValueOnce(jsonResponse(renamed));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Concordância" }));
+    fireEvent.change(screen.getByLabelText("Editar nome do conteúdo"), {
+      target: { value: "Concordância verbal" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alteração" }));
+    expect(await screen.findByText("Concordância verbal")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Arquivar Concordância verbal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar arquivamento" }));
+    await waitFor(() => expect(screen.queryByText("Concordância verbal")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Arquivados" }));
+    expect(await screen.findByText("Concordância verbal")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Restaurar Concordância verbal" }));
+    await waitFor(() => expect(screen.queryByText("Concordância verbal")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ativos" }));
+    expect(await screen.findByText("Concordância verbal")).toBeVisible();
+  });
+
+  it("keeps the content form open and explains a duplicate name conflict", async () => {
+    const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
+    window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse({ id: subjectId, name: "Direito", archived: false }))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse({ detail: "Já existe um conteúdo ativo com esse nome nesta matéria." }, 409));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Novo conteúdo" }));
+    fireEvent.change(screen.getByLabelText("Nome do conteúdo"), { target: { value: "Atos administrativos" } });
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar conteúdo" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Já existe um conteúdo ativo com esse nome nesta matéria."
+    );
+    expect(screen.getByLabelText("Nome do conteúdo")).toHaveValue("Atos administrativos");
+  });
+
+  it("recovers the content catalog after an error and then shows its empty state", async () => {
+    const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
+    window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse({ id: subjectId, name: "Matemática", archived: false }))
+      .mockResolvedValueOnce(jsonResponse({ detail: "Banco temporariamente indisponível." }, 503))
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "Os conteúdos não puderam ser abertos" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+
+    expect(await screen.findByRole("heading", { name: "Adicione o primeiro conteúdo" })).toBeVisible();
+  });
+
   it("recovers the subject catalog after a loading error", async () => {
     window.history.pushState({}, "", "/materias");
     const fetchMock = vi.fn()
