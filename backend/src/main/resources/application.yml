@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: estuda-livre
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/estuda_livre}
+    username: ${DATABASE_USERNAME:estuda_livre}
+    password: ${DATABASE_PASSWORD:estuda_livre}
+  flyway:
+    validate-migration-naming: true
+
+management:
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+        add-additional-paths: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+info:
+  app:
+    name: ${spring.application.name}
+    version: "@project.version@"

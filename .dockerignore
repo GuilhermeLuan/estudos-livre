@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+**/.DS_Store
+**/node_modules
+**/dist
+**/playwright-report
+**/test-results
+**/target
+prototype.html
+docs
