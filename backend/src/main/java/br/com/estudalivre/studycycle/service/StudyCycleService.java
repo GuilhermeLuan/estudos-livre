@@ -62,12 +62,30 @@ public class StudyCycleService {
         return toResponse(findOwned(cycleId, ownerId));
     }
 
+    @Transactional
+    public StudyCycleResponse activate(UUID ownerId, UUID cycleId) {
+        StudyCycle cycle = findOwned(cycleId, ownerId);
+        if (studyCycleRepository.findStages(cycle.id()).isEmpty()) {
+            throw new StudyCycleNotActivatableException();
+        }
+        studyCycleRepository.lockOwner(ownerId);
+        if (studyCycleRepository.findCurrentRun(cycleId).isEmpty()) {
+            studyCycleRepository.createRun(UUID.randomUUID(), cycleId);
+        }
+        studyCycleRepository.deactivateActiveCycles(ownerId, cycleId);
+        studyCycleRepository.activate(cycleId, ownerId);
+        return toResponse(findOwned(cycleId, ownerId));
+    }
+
     private StudyCycle findOwned(UUID cycleId, UUID ownerId) {
         return studyCycleRepository.findByIdAndOwnerId(cycleId, ownerId)
                 .orElseThrow(StudyCycleNotFoundException::new);
     }
 
     private StudyCycleResponse toResponse(StudyCycle cycle) {
-        return StudyCycleResponse.from(cycle, studyCycleRepository.findStages(cycle.id()));
+        return StudyCycleResponse.from(
+                cycle,
+                studyCycleRepository.findStages(cycle.id()),
+                studyCycleRepository.findCurrentRun(cycle.id()).orElse(null));
     }
 }

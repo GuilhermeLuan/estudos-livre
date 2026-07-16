@@ -56,4 +56,11 @@ public class StudyCycleController {
             @Valid @RequestBody UpdateStudyCycleRequest request) {
         return studyCycleService.update(principal.id(), id, request);
     }
+
+    @PostMapping("/{id}/activate")
+    public StudyCycleResponse activate(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id) {
+        return studyCycleService.activate(principal.id(), id);
+    }
 }

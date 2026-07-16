@@ -1,6 +1,7 @@
 package br.com.estudalivre.studycycle.dto;
 
 import br.com.estudalivre.studycycle.model.StudyCycle;
+import br.com.estudalivre.studycycle.model.StudyCycleRun;
 import br.com.estudalivre.studycycle.model.StudyCycleStage;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -13,11 +14,15 @@ public record StudyCycleResponse(
         String status,
         int totalMinutes,
         boolean activatable,
+        StudyCycleRunResponse currentRun,
         List<StudyCycleStageResponse> stages,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
 
-    public static StudyCycleResponse from(StudyCycle cycle, List<StudyCycleStage> stages) {
+    public static StudyCycleResponse from(
+            StudyCycle cycle,
+            List<StudyCycleStage> stages,
+            StudyCycleRun currentRun) {
         List<StudyCycleStageResponse> stageResponses = stages.stream()
                 .map(stage -> new StudyCycleStageResponse(
                         stage.id(),
@@ -34,6 +39,7 @@ public record StudyCycleResponse(
                 cycle.status(),
                 stages.stream().mapToInt(StudyCycleStage::targetMinutes).sum(),
                 !stages.isEmpty(),
+                currentRun == null ? null : StudyCycleRunResponse.from(currentRun),
                 stageResponses,
                 cycle.createdAt(),
                 cycle.updatedAt());

@@ -587,6 +587,69 @@ a.danger-button {
 .cycle-content { max-width: 1040px; }
 .cycle-composer { border-top: 3px solid var(--marker); }
 
+.cycle-active-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) minmax(150px, 0.55fr) auto;
+  align-items: center;
+  gap: 20px;
+  overflow: hidden;
+  margin-bottom: 28px;
+  padding: 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-panel);
+  background: var(--paper-raised);
+  box-shadow: var(--lift-medium);
+}
+
+.cycle-active-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--marker);
+}
+
+.cycle-active-mark {
+  width: 48px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  padding-bottom: 7px;
+  color: var(--paper-raised);
+  background: var(--binder);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 80%, 0 100%);
+}
+
+.cycle-active-mark svg { width: 21px; height: 21px; }
+.cycle-active-copy { min-width: 0; }
+.cycle-active-status { display: flex; align-items: center; gap: 7px; color: var(--binder); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.cycle-active-status > span { width: 7px; height: 7px; border-radius: 50%; background: var(--binder); box-shadow: 0 0 0 4px var(--binder-soft); }
+.cycle-active-copy h2 { margin: 6px 0 4px; font: 700 30px/1.05 var(--font-display); letter-spacing: -0.035em; text-wrap: balance; }
+.cycle-active-copy p { margin: 0; color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+.cycle-active-next { min-width: 0; padding: 12px 16px; border-left: 3px solid var(--marker); background: var(--marker-soft); }
+.cycle-active-next span,
+.cycle-active-total span { display: block; color: var(--ink-faint); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.cycle-active-next strong { display: block; overflow-wrap: anywhere; margin-top: 4px; font-size: 14px; }
+.cycle-active-total { min-width: 104px; text-align: right; }
+.cycle-active-total strong { display: block; margin-top: 6px; color: var(--binder); font: 700 22px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+
+.cycle-no-active {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-card);
+  background: var(--paper-inset);
+}
+
+.cycle-no-active strong { font: 700 17px/1.2 var(--font-display); }
+.cycle-no-active p { margin: 4px 0 0; color: var(--ink-soft); font-size: 12px; }
+.cycle-activation-error { margin: -12px 0 24px; }
+
 .cycle-draft-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -623,6 +686,10 @@ a.danger-button {
 .cycle-draft-card p { margin: 4px 0 0; color: var(--ink-faint); font-size: 11px; }
 .cycle-total { color: var(--binder); font: 700 18px/1 var(--font-display); font-variant-numeric: tabular-nums; }
 .cycle-edit-button { grid-column: 2 / -1; justify-self: start; min-height: 40px; padding: 8px 12px; }
+.cycle-card-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.cycle-card-actions .primary-button,
+.cycle-card-actions .secondary-button { min-height: 44px; margin: 0; padding: 9px 14px; }
+.cycle-activate-button:active { transform: scale(0.97); }
 
 .cycle-workbench {
   overflow: hidden;
@@ -936,6 +1003,8 @@ a.danger-button {
   .subjects-error { grid-template-columns: auto minmax(0, 1fr); }
   .subjects-error .secondary-button { grid-column: 1 / -1; width: 100%; }
   .content-catalog-content { padding-top: 24px; }
+  .cycle-active-card { grid-template-columns: 48px minmax(0, 1fr) auto; padding: 20px; }
+  .cycle-active-next { grid-column: 2 / -1; }
   .cycle-draft-list { grid-template-columns: 1fr; }
   .cycle-workbench-header { align-items: flex-start; padding: 20px; }
   .cycle-editor-form { padding: 20px; }
@@ -973,6 +1042,13 @@ a.danger-button {
   .catalog-back-link { margin-bottom: 8px; }
   .content-row { padding-left: 16px; }
   .content-list::before { left: 5px; width: 2px; }
+  .cycle-active-card { grid-template-columns: 44px minmax(0, 1fr); gap: 14px; }
+  .cycle-active-mark { width: 42px; height: 52px; }
+  .cycle-active-copy h2 { font-size: 26px; }
+  .cycle-active-next,
+  .cycle-active-total { grid-column: 1 / -1; width: 100%; text-align: left; }
+  .cycle-card-actions { grid-column: 1 / -1; }
+  .cycle-card-actions button { flex: 1; }
   .cycle-workbench-header { display: grid; gap: 16px; }
   .cycle-running-total { width: 100%; }
   .cycle-subject-totals-header { display: grid; gap: 8px; }

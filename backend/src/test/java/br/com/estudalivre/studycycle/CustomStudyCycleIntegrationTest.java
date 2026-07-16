@@ -222,6 +222,7 @@ class CustomStudyCycleIntegrationTest {
 
     private void cleanDatabase() {
         jdbcTemplate.update("DELETE FROM spring_session");
+        jdbcTemplate.update("DELETE FROM study_cycle_run");
         jdbcTemplate.update("DELETE FROM study_cycle_stage");
         jdbcTemplate.update("DELETE FROM study_cycle");
         jdbcTemplate.update("DELETE FROM content");

@@ -16,6 +16,12 @@ export type StudyCycle = {
   status: "DRAFT" | "INACTIVE" | "ACTIVE";
   totalMinutes: number;
   activatable: boolean;
+  currentRun: {
+    id: string;
+    number: number;
+    currentStagePosition: number;
+    startedAt: string;
+  } | null;
   stages: StudyCycleStage[];
   createdAt: string;
   updatedAt: string;
@@ -53,5 +59,13 @@ export async function updateStudyCycle(
     body: JSON.stringify({ name, stages })
   });
   await requireSuccess(response, "Não foi possível salvar o ciclo.");
+  return response.json() as Promise<StudyCycle>;
+}
+
+export async function activateStudyCycle(id: string): Promise<StudyCycle> {
+  const response = await apiFetch(`/api/study-cycles/${id}/activate`, {
+    method: "POST"
+  });
+  await requireSuccess(response, "Não foi possível ativar o ciclo.");
   return response.json() as Promise<StudyCycle>;
 }

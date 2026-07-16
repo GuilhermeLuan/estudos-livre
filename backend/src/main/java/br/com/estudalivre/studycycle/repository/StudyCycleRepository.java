@@ -1,6 +1,7 @@
 package br.com.estudalivre.studycycle.repository;
 
 import br.com.estudalivre.studycycle.model.StudyCycle;
+import br.com.estudalivre.studycycle.model.StudyCycleRun;
 import br.com.estudalivre.studycycle.model.StudyCycleStage;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -105,6 +106,65 @@ public class StudyCycleRepository {
                 .list();
     }
 
+    public int activate(UUID cycleId, UUID ownerId) {
+        return jdbcClient.sql("""
+                        UPDATE study_cycle
+                        SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :cycleId AND owner_id = :ownerId
+                        """)
+                .param("cycleId", cycleId)
+                .param("ownerId", ownerId)
+                .update();
+    }
+
+    public void lockOwner(UUID ownerId) {
+        jdbcClient.sql("""
+                        SELECT id
+                        FROM identity_user
+                        WHERE id = :ownerId
+                        FOR UPDATE
+                        """)
+                .param("ownerId", ownerId)
+                .query(UUID.class)
+                .single();
+    }
+
+    public void deactivateActiveCycles(UUID ownerId, UUID exceptCycleId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle
+                        SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP
+                        WHERE owner_id = :ownerId
+                          AND status = 'ACTIVE'
+                          AND id <> :exceptCycleId
+                        """)
+                .param("ownerId", ownerId)
+                .param("exceptCycleId", exceptCycleId)
+                .update();
+    }
+
+    public void createRun(UUID id, UUID cycleId) {
+        jdbcClient.sql("""
+                        INSERT INTO study_cycle_run (id, cycle_id, run_number, current_stage_position)
+                        VALUES (:id, :cycleId, 1, 1)
+                        """)
+                .param("id", id)
+                .param("cycleId", cycleId)
+                .update();
+    }
+
+    public Optional<StudyCycleRun> findCurrentRun(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT id, cycle_id, run_number, current_stage_position, started_at
+                        FROM study_cycle_run
+                        WHERE cycle_id = :cycleId AND completed_at IS NULL
+                        ORDER BY run_number DESC
+                        LIMIT 1
+                        """)
+                .param("cycleId", cycleId)
+                .query(StudyCycleRepository::mapRun)
+                .optional();
+    }
+
     private static StudyCycle mapCycle(ResultSet resultSet, int rowNumber) throws SQLException {
         return new StudyCycle(
                 resultSet.getObject("id", UUID.class),
@@ -124,5 +184,14 @@ public class StudyCycleRepository {
                 resultSet.getString("subject_name"),
                 resultSet.getInt("position"),
                 resultSet.getInt("target_minutes"));
+    }
+
+    private static StudyCycleRun mapRun(ResultSet resultSet, int rowNumber) throws SQLException {
+        return new StudyCycleRun(
+                resultSet.getObject("id", UUID.class),
+                resultSet.getObject("cycle_id", UUID.class),
+                resultSet.getInt("run_number"),
+                resultSet.getInt("current_stage_position"),
+                resultSet.getObject("started_at", OffsetDateTime.class));
     }
 }
