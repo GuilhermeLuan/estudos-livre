@@ -7,6 +7,14 @@ spring:
     password: ${DATABASE_PASSWORD:estuda_livre}
   flyway:
     validate-migration-naming: true
+  session:
+    jdbc:
+      initialize-schema: never
+
+server:
+  servlet:
+    session:
+      timeout: ${SESSION_TIMEOUT:30m}
 
 management:
   endpoint:

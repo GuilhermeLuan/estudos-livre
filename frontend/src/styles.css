@@ -221,7 +221,8 @@ svg {
   clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 78%, 0 100%);
 }
 
-.status-card {
+.status-card,
+.auth-card {
   overflow: hidden;
   border-radius: var(--radius-panel);
   background: var(--paper-raised);
@@ -246,11 +247,108 @@ svg {
   color: var(--binder);
 }
 
-.status-card h2 {
+.status-card h2,
+.auth-card h2 {
   margin: 2px 0 0;
   font: 700 28px/1.1 var(--font-display);
   letter-spacing: -0.035em;
 }
+
+.auth-content { width: min(820px, 100%); }
+
+.auth-card {
+  animation: settle-in 360ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.auth-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 24px 24px 20px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.auth-card-body { padding: 24px; }
+
+.card-intro {
+  margin: 0 0 24px;
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+
+.auth-form { display: grid; gap: 8px; }
+
+.auth-form label {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-form input {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.3 var(--font-ui);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.auth-form input:hover { border-color: color-mix(in srgb, var(--binder) 35%, var(--line)); }
+.auth-form input:focus { border-color: var(--binder); background: var(--paper-raised); box-shadow: 0 0 0 3px color-mix(in srgb, var(--binder) 16%, transparent); }
+
+.field-hint,
+.field-error { font-size: 11px; }
+.field-hint { color: var(--ink-faint); }
+.field-error { color: var(--late); font-weight: 700; }
+
+.form-error,
+.success-notice {
+  margin: 8px 0 0;
+  padding: 11px 13px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+}
+.form-error { color: var(--late); background: var(--late-soft); }
+.success-notice { color: var(--binder); background: var(--binder-soft); }
+
+.primary-button,
+.secondary-button {
+  min-height: 46px;
+  padding: 10px 18px;
+  border-radius: var(--radius-control);
+  font: 700 13px/1 var(--font-ui);
+  cursor: pointer;
+  transition: transform 120ms cubic-bezier(0.23, 1, 0.32, 1), background-color 140ms ease;
+}
+
+.primary-button {
+  margin-top: 16px;
+  border: 0;
+  background: var(--binder);
+  color: var(--paper-raised);
+}
+.secondary-button { border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.primary-button:hover { background: color-mix(in srgb, var(--binder) 88%, black); }
+.secondary-button:hover { background: var(--paper-inset); }
+.primary-button:active,
+.secondary-button:active { transform: scale(0.98); }
+.primary-button:focus-visible,
+.secondary-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--binder) 35%, transparent); outline-offset: 2px; }
+.primary-button:disabled,
+.secondary-button:disabled { cursor: wait; opacity: 0.62; }
+
+.identity-list { margin: 0 0 24px; border-top: 1px solid var(--line-soft); }
+.identity-list div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line-soft); }
+.identity-list dt { color: var(--ink-faint); font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.identity-list dd { margin: 0; overflow-wrap: anywhere; font-weight: 700; }
 
 .health-pill {
   min-height: 36px;
@@ -342,6 +440,7 @@ svg {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes settle-in { from { opacity: 0; transform: translateY(8px); } }
 
 @media (max-width: 760px) {
   .app-shell { display: block; }
@@ -358,6 +457,8 @@ svg {
   .page-heading p { font-size: 14px; }
   .heading-bookmark { width: 36px; height: 48px; }
   .status-card-head { grid-template-columns: auto minmax(0, 1fr); padding: 20px; }
+  .auth-card-head { padding: 20px; }
+  .auth-card-body { padding: 20px; }
   .health-pill { grid-column: 1 / -1; width: fit-content; }
   .status-card h2 { font-size: 24px; }
   .health-item { padding: 16px 20px; }
@@ -372,8 +473,10 @@ svg {
   .status-card-head { grid-template-columns: 1fr; }
   .health-pill { grid-column: auto; }
   .health-item { grid-template-columns: 30px minmax(0, 1fr); }
+  .identity-list div { grid-template-columns: 1fr; gap: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skeleton { animation: none; }
+  .skeleton,
+  .auth-card { animation: none; }
 }
