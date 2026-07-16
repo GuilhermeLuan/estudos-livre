@@ -124,6 +124,7 @@ describe("authentication journey", () => {
   });
 
   it("shows only the identity stored in the authenticated session", async () => {
+    window.history.pushState({}, "", "/conta");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
       .mockResolvedValueOnce(jsonResponse({
@@ -141,6 +142,138 @@ describe("authentication journey", () => {
     expect(screen.getByRole("button", { name: "Sair" })).toBeEnabled();
   });
 
+  it("opens the authenticated subject catalog with the user's active subjects", async () => {
+    window.history.pushState({}, "", "/materias");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: "d0508bf2-7d0e-467b-a720-b472f43ddf66",
+        email: "pessoa@example.com",
+        timeZone: "America/Sao_Paulo"
+      }))
+      .mockResolvedValueOnce(jsonResponse([{
+        id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+        name: "Língua Portuguesa",
+        archived: false,
+        createdAt: "2026-07-16T12:00:00Z",
+        updatedAt: "2026-07-16T12:00:00Z"
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Minhas matérias" })).toBeVisible();
+    expect(await screen.findByText("Língua Portuguesa")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Nova matéria" })).toBeEnabled();
+  });
+
+  it("creates a subject and shows it without reloading the application", async () => {
+    window.history.pushState({}, "", "/materias");
+    document.cookie = "XSRF-TOKEN=token-materia; Path=/";
+    const created = {
+      id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      name: "Direito Administrativo",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: "d0508bf2-7d0e-467b-a720-b472f43ddf66",
+        email: "pessoa@example.com",
+        timeZone: "America/Sao_Paulo"
+      }))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(created, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Nova matéria" }));
+    fireEvent.change(screen.getByLabelText("Nome da matéria"), {
+      target: { value: "Direito Administrativo" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Adicionar matéria" }));
+
+    expect(await screen.findByText("Direito Administrativo")).toBeVisible();
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/subjects", expect.objectContaining({
+      method: "POST"
+    }));
+  });
+
+  it("renames a subject in place", async () => {
+    window.history.pushState({}, "", "/materias");
+    const original = {
+      id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      name: "Português",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse([original]))
+      .mockResolvedValueOnce(jsonResponse({ ...original, name: "Língua Portuguesa" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Português" }));
+    const input = screen.getByLabelText("Editar nome da matéria");
+    fireEvent.change(input, { target: { value: "Língua Portuguesa" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar alteração" }));
+
+    expect(await screen.findByText("Língua Portuguesa")).toBeVisible();
+    expect(screen.queryByText("Português")).not.toBeInTheDocument();
+  });
+
+  it("moves a subject between active and archived catalogs", async () => {
+    window.history.pushState({}, "", "/materias");
+    const subject = {
+      id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      name: "Matemática",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse([subject]))
+      .mockResolvedValueOnce(jsonResponse({ ...subject, archived: true }))
+      .mockResolvedValueOnce(jsonResponse({ ...subject, archived: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Arquivar Matemática" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar arquivamento" }));
+    await waitFor(() => expect(screen.queryByText("Matemática")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Arquivadas" }));
+    expect(await screen.findByText("Matemática")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Restaurar Matemática" }));
+    await waitFor(() => expect(screen.queryByText("Matemática")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ativas" }));
+    expect(await screen.findByText("Matemática")).toBeVisible();
+  });
+
+  it("recovers the subject catalog after a loading error", async () => {
+    window.history.pushState({}, "", "/materias");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse({ detail: "Banco temporariamente indisponível." }, 503))
+      .mockResolvedValueOnce(jsonResponse([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    expect(await screen.findByRole("heading", { name: "O catálogo não pôde ser aberto" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+
+    expect(await screen.findByRole("heading", { name: "Seu catálogo começa aqui" })).toBeVisible();
+  });
+
   it("submits credentials as a form and opens the authenticated session", async () => {
     document.cookie = "XSRF-TOKEN=token-login; Path=/";
     const fetchMock = vi.fn()
@@ -151,7 +284,8 @@ describe("authentication journey", () => {
         id: "d0508bf2-7d0e-467b-a720-b472f43ddf66",
         email: "pessoa@example.com",
         timeZone: "America/Sao_Paulo"
-      }));
+      }))
+      .mockResolvedValueOnce(jsonResponse([]));
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
@@ -165,7 +299,7 @@ describe("authentication journey", () => {
     fireEvent.click(screen.getByRole("button", { name: "Entrar" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(await screen.findByText("pessoa@example.com")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Minhas matérias" })).toBeVisible();
     expect(fetchMock.mock.calls[2]?.[1]).toEqual(expect.objectContaining({
       method: "POST",
       body: expect.any(URLSearchParams)
@@ -173,6 +307,7 @@ describe("authentication journey", () => {
   });
 
   it("ends the session and returns to login", async () => {
+    window.history.pushState({}, "", "/conta");
     document.cookie = "XSRF-TOKEN=token-logout; Path=/";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
@@ -195,6 +330,7 @@ describe("authentication journey", () => {
   });
 
   it("changes the password without ending the current session", async () => {
+    window.history.pushState({}, "", "/conta");
     document.cookie = "XSRF-TOKEN=token-troca; Path=/";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ registrationRequired: false, registrationEnabled: false }))
