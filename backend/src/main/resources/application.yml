@@ -37,3 +37,7 @@ info:
   app:
     name: ${spring.application.name}
     version: "@project.version@"
+
+app:
+  registration-enabled: ${APP_REGISTRATION_ENABLED:false}
+  base-url: ${APP_BASE_URL:http://localhost:8080}

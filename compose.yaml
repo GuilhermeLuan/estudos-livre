@@ -24,6 +24,8 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-estuda_livre}
       DATABASE_USERNAME: ${POSTGRES_USER:-estuda_livre}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-estuda_livre}
+      APP_REGISTRATION_ENABLED: ${APP_REGISTRATION_ENABLED:-false}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
       SESSION_TIMEOUT: ${SESSION_TIMEOUT:-30m}
       SERVER_FORWARD_HEADERS_STRATEGY: ${SERVER_FORWARD_HEADERS_STRATEGY:-none}
     depends_on:

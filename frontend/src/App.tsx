@@ -1,9 +1,13 @@
 import { FormEvent, ReactNode, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BrowserRouter, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ApiError,
   AuthSnapshot,
   createInitialAccount,
+  changePassword,
+  registerAccount,
+  resetPassword,
   loadAuthSnapshot,
   login,
   logout
@@ -104,15 +108,21 @@ function BootstrapForm({ onComplete }: { onComplete: () => void }) {
   );
 }
 
-function LoginForm({ notice, onAuthenticated }: {
+function LoginForm({ notice, onAuthenticated, registrationEnabled, onRegister }: {
   notice?: string;
   onAuthenticated: (snapshot: AuthSnapshot) => void;
+  registrationEnabled: boolean;
+  onRegister: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const mutation = useMutation({
     mutationFn: () => login(email, password),
-    onSuccess: (identity) => onAuthenticated({ state: "authenticated", identity })
+    onSuccess: (identity) => onAuthenticated({
+      state: "authenticated",
+      identity,
+      registrationEnabled
+    })
   });
 
   function submit(event: FormEvent) {
@@ -131,6 +141,48 @@ function LoginForm({ notice, onAuthenticated }: {
         <button className="primary-button" type="submit" disabled={mutation.isPending}>
           {mutation.isPending ? "Entrando…" : "Entrar"}
         </button>
+        {registrationEnabled && (
+          <button className="text-button" type="button" onClick={onRegister}>
+            Criar uma conta
+          </button>
+        )}
+      </form>
+    </AuthCard>
+  );
+}
+
+function RegistrationForm({ onComplete, onCancel }: { onComplete: () => void; onCancel: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [timeZone, setTimeZone] = useState(() =>
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo"
+  );
+  const mutation = useMutation({ mutationFn: registerAccount, onSuccess: onComplete });
+  const error = mutation.error instanceof ApiError ? mutation.error : undefined;
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    mutation.mutate({ email, password, timeZone });
+  }
+
+  return (
+    <AuthCard kicker="Cadastro habilitado" title="Crie sua conta">
+      <p className="card-intro">Sua identidade ficará somente nesta instalação.</p>
+      <form className="auth-form" onSubmit={submit}>
+        <label>E-mail<input type="email" autoComplete="email" required maxLength={320} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <FieldError message={error?.fieldErrors.email} />
+        <label>Senha<input type="password" autoComplete="new-password" required minLength={12} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <span className="field-hint">Use pelo menos 12 caracteres.</span>
+        <FieldError message={error?.fieldErrors.password} />
+        <label>Fuso horário<input type="text" required maxLength={255} value={timeZone} onChange={(event) => setTimeZone(event.target.value)} /></label>
+        <FieldError message={error?.fieldErrors.timeZone} />
+        {error && <p className="form-error" role="alert">{error.message}</p>}
+        <div className="form-actions">
+          <button className="secondary-button" type="button" onClick={onCancel}>Voltar</button>
+          <button className="primary-button" type="submit" disabled={mutation.isPending}>
+            {mutation.isPending ? "Criando conta…" : "Criar conta"}
+          </button>
+        </div>
       </form>
     </AuthCard>
   );
@@ -148,11 +200,50 @@ function AuthenticatedCard({ snapshot, onLogout }: {
         <div><dt>E-mail</dt><dd>{snapshot.identity.email}</dd></div>
         <div><dt>Fuso horário</dt><dd>{snapshot.identity.timeZone}</dd></div>
       </dl>
+      <PasswordChangeForm />
       {mutation.isError && <p className="form-error" role="alert">Não foi possível encerrar a sessão.</p>}
       <button className="secondary-button" type="button" onClick={() => mutation.mutate()} disabled={mutation.isPending}>
         {mutation.isPending ? "Saindo…" : "Sair"}
       </button>
     </AuthCard>
+  );
+}
+
+function PasswordChangeForm() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const mutation = useMutation({
+    mutationFn: () => changePassword(currentPassword, newPassword),
+    onSuccess: () => {
+      setCurrentPassword("");
+      setNewPassword("");
+    }
+  });
+  const error = mutation.error instanceof ApiError ? mutation.error : undefined;
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    mutation.mutate();
+  }
+
+  return (
+    <section className="credential-section" aria-labelledby="password-change-title">
+      <div className="section-heading">
+        <span className="card-kicker">Credencial</span>
+        <h3 id="password-change-title">Atualize sua senha</h3>
+        <p>As outras sessões serão encerradas; esta continuará ativa.</p>
+      </div>
+      <form className="auth-form" onSubmit={submit}>
+        <label>Senha atual<input type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+        <label>Nova senha<input type="password" autoComplete="new-password" required minLength={12} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+        <span className="field-hint">Use pelo menos 12 caracteres.</span>
+        {error && <p className="form-error" role="alert">{error.message}</p>}
+        {mutation.isSuccess && <p className="success-notice" role="status">Senha atualizada. Esta sessão continua ativa.</p>}
+        <button className="primary-button compact-button" type="submit" disabled={mutation.isPending}>
+          {mutation.isPending ? "Atualizando…" : "Atualizar senha"}
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -168,9 +259,12 @@ function AuthCard({ kicker, title, children }: { kicker: string; title: string; 
   );
 }
 
-export function App() {
+function CredentialHome() {
   const queryClient = useQueryClient();
-  const [notice, setNotice] = useState<string>();
+  const location = useLocation();
+  const locationNotice = (location.state as { notice?: string } | null)?.notice;
+  const [notice, setNotice] = useState<string | undefined>(locationNotice);
+  const [showRegistration, setShowRegistration] = useState(false);
   const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
   const snapshot = auth.data;
 
@@ -203,10 +297,80 @@ export function App() {
             <button className="primary-button" type="button" onClick={() => void auth.refetch()}>Tentar novamente</button>
           </section>
         )}
-        {snapshot?.state === "bootstrap" && <BootstrapForm onComplete={() => { setNotice("Conta criada. Agora, entre para continuar."); setSnapshot({ state: "login" }); }} />}
-        {snapshot?.state === "login" && <LoginForm notice={notice} onAuthenticated={setSnapshot} />}
-        {snapshot?.state === "authenticated" && <AuthenticatedCard snapshot={snapshot} onLogout={() => { setNotice("Sessão encerrada com segurança."); setSnapshot({ state: "login" }); }} />}
+        {snapshot?.state === "bootstrap" && <BootstrapForm onComplete={() => { setNotice("Conta criada. Agora, entre para continuar."); setSnapshot({ state: "login", registrationEnabled: snapshot.registrationEnabled }); }} />}
+        {snapshot?.state === "login" && showRegistration && (
+          <RegistrationForm
+            onCancel={() => setShowRegistration(false)}
+            onComplete={() => { setNotice("Conta criada. Agora, entre para continuar."); setShowRegistration(false); }}
+          />
+        )}
+        {snapshot?.state === "login" && !showRegistration && (
+          <LoginForm
+            notice={notice}
+            registrationEnabled={snapshot.registrationEnabled}
+            onRegister={() => setShowRegistration(true)}
+            onAuthenticated={setSnapshot}
+          />
+        )}
+        {snapshot?.state === "authenticated" && <AuthenticatedCard snapshot={snapshot} onLogout={() => { setNotice("Sessão encerrada com segurança."); setSnapshot({ state: "login", registrationEnabled: snapshot.registrationEnabled }); }} />}
       </main>
     </AppShell>
+  );
+}
+
+function PasswordResetPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const token = searchParams.get("token") ?? "";
+  const [newPassword, setNewPassword] = useState("");
+  const mutation = useMutation({
+    mutationFn: () => resetPassword(token, newPassword),
+    onSuccess: () => navigate("/", {
+      replace: true,
+      state: { notice: "Senha redefinida. Entre com sua nova senha." }
+    })
+  });
+  const error = mutation.error instanceof ApiError ? mutation.error : undefined;
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    mutation.mutate();
+  }
+
+  return (
+    <AppShell authenticated={false}>
+      <main className="content auth-content reset-content">
+        <div className="page-heading">
+          <div>
+            <span className="eyebrow">Recupere seu acesso</span>
+            <h1>Uma nova chave para o seu espaço de estudo.</h1>
+            <p>Este link é temporário e pode ser usado uma única vez.</p>
+          </div>
+          <div className="heading-bookmark recovery-bookmark" aria-hidden="true">02</div>
+        </div>
+        <AuthCard kicker="Link temporário" title="Defina uma nova senha">
+          <p className="card-intro">Escolha uma senha com pelo menos 12 caracteres.</p>
+          <form className="auth-form" onSubmit={submit}>
+            <label>Nova senha<input type="password" autoComplete="new-password" required minLength={12} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+            {!token && <p className="form-error" role="alert">Este link de redefinição é inválido ou expirou.</p>}
+            {error && <p className="form-error" role="alert">{error.message}</p>}
+            <button className="primary-button recovery-button" type="submit" disabled={mutation.isPending || !token}>
+              {mutation.isPending ? "Redefinindo…" : "Redefinir senha"}
+            </button>
+          </form>
+        </AuthCard>
+      </main>
+    </AppShell>
+  );
+}
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<CredentialHome />} />
+        <Route path="/redefinir-senha" element={<PasswordResetPage />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

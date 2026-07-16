@@ -29,6 +29,7 @@ describe("authentication journey", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     document.cookie = "XSRF-TOKEN=; Max-Age=0; Path=/";
+    window.history.replaceState({}, "", "/");
   });
 
   it("invites the first visitor to create the initial account", async () => {
@@ -54,6 +55,46 @@ describe("authentication journey", () => {
 
     expect(await screen.findByRole("heading", { name: "Entre no seu espaço" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Entrar" })).toBeEnabled();
+  });
+
+  it("offers public registration only when the operator enabled it", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        registrationRequired: false,
+        registrationEnabled: true
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Criar uma conta" }));
+
+    expect(await screen.findByRole("heading", { name: "Crie sua conta" })).toBeVisible();
+  });
+
+  it("creates a public account and returns to login", async () => {
+    document.cookie = "XSRF-TOKEN=token-cadastro; Path=/";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({
+        registrationRequired: false,
+        registrationEnabled: true
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Criar uma conta" }));
+    fireEvent.change(screen.getByLabelText("E-mail"), { target: { value: "pessoa@example.com" } });
+    fireEvent.change(screen.getByLabelText("Senha"), { target: { value: "uma frase senha segura" } });
+    fireEvent.click(screen.getByRole("button", { name: "Criar conta" }));
+
+    expect(await screen.findByText("Conta criada. Agora, entre para continuar.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Entre no seu espaço" })).toBeVisible();
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/auth/register", expect.objectContaining({
+      method: "POST"
+    }));
   });
 
   it("creates the initial account and continues to login", async () => {
@@ -151,5 +192,83 @@ describe("authentication journey", () => {
     expect(screen.getByText("Sessão encerrada com segurança.")).toBeVisible();
     const headers = fetchMock.mock.calls[2]?.[1]?.headers as Headers;
     expect(headers.get("X-XSRF-TOKEN")).toBe("token-logout");
+  });
+
+  it("changes the password without ending the current session", async () => {
+    document.cookie = "XSRF-TOKEN=token-troca; Path=/";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false, registrationEnabled: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: "d0508bf2-7d0e-467b-a720-b472f43ddf66",
+        email: "pessoa@example.com",
+        timeZone: "America/Sao_Paulo"
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.change(await screen.findByLabelText("Senha atual"), {
+      target: { value: "uma frase senha segura" }
+    });
+    fireEvent.change(screen.getByLabelText("Nova senha"), {
+      target: { value: "uma nova frase senha segura" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Atualizar senha" }));
+
+    expect(await screen.findByText("Senha atualizada. Esta sessão continua ativa.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Seu espaço está protegido" })).toBeVisible();
+  });
+
+  it("opens the password reset route directly and asks only for the new password", async () => {
+    window.history.pushState({}, "", "/redefinir-senha?token=token-do-link");
+    vi.stubGlobal("fetch", vi.fn());
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Defina uma nova senha" })).toBeVisible();
+    expect(screen.getByLabelText("Nova senha")).toBeEnabled();
+    expect(screen.queryByLabelText("E-mail")).not.toBeInTheDocument();
+  });
+
+  it("resets the password from the link and redirects to login", async () => {
+    window.history.pushState({}, "", "/redefinir-senha?token=token-do-link");
+    document.cookie = "XSRF-TOKEN=token-reset; Path=/";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false, registrationEnabled: false }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.change(await screen.findByLabelText("Nova senha"), {
+      target: { value: "uma nova frase senha segura" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Redefinir senha" }));
+
+    expect(await screen.findByText("Senha redefinida. Entre com sua nova senha.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Entre no seu espaço" })).toBeVisible();
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/auth/password/reset", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ token: "token-do-link", newPassword: "uma nova frase senha segura" })
+    }));
+  });
+
+  it("keeps the visitor on the reset page when the link is invalid", async () => {
+    window.history.pushState({}, "", "/redefinir-senha?token=token-invalido");
+    document.cookie = "XSRF-TOKEN=token-reset; Path=/";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse({
+      detail: "Este link de redefinição é inválido ou expirou."
+    }, 400)));
+
+    renderApp();
+    fireEvent.change(await screen.findByLabelText("Nova senha"), {
+      target: { value: "uma nova frase senha segura" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Redefinir senha" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Este link de redefinição é inválido ou expirou."
+    );
+    expect(screen.getByRole("heading", { name: "Defina uma nova senha" })).toBeVisible();
   });
 });

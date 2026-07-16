@@ -1,7 +1,9 @@
 package br.com.estudalivre.identity.config;
 
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
@@ -16,6 +18,7 @@ import org.springframework.http.HttpStatus;
 public class SecurityConfiguration {
 
     @Bean
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         CookieCsrfTokenRepository csrfTokenRepository = CookieCsrfTokenRepository.withHttpOnlyFalse();
         csrfTokenRepository.setCookieCustomizer(cookie -> cookie.sameSite("Lax"));
@@ -24,9 +27,9 @@ public class SecurityConfiguration {
                 .csrf(csrf -> csrf.spa().csrfTokenRepository(csrfTokenRepository))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(
-                                "/", "/index.html", "/assets/**", "/api/status",
+                                "/", "/index.html", "/redefinir-senha", "/assets/**", "/api/status",
                                 "/api/auth/bootstrap-status", "/api/auth/bootstrap",
-                                "/api/auth/login",
+                                "/api/auth/login", "/api/auth/register", "/api/auth/password/reset",
                                 "/actuator/health/**", "/livez", "/readyz")
                         .permitAll()
                 .anyRequest().authenticated())
@@ -62,5 +65,10 @@ public class SecurityConfiguration {
         serializer.setUseHttpOnlyCookie(true);
         serializer.setSameSite("Lax");
         return serializer;
+    }
+
+    @Bean
+    Clock clock() {
+        return Clock.systemUTC();
     }
 }

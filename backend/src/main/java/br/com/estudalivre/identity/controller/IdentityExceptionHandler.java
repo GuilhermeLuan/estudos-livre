@@ -5,6 +5,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import br.com.estudalivre.identity.service.BootstrapAlreadyCompletedException;
+import br.com.estudalivre.identity.service.RegistrationClosedException;
+import br.com.estudalivre.identity.service.DuplicateIdentityEmailException;
+import br.com.estudalivre.identity.service.CurrentPasswordIncorrectException;
+import br.com.estudalivre.identity.service.PasswordResetTokenInvalidException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -33,6 +37,34 @@ public class IdentityExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
         problem.setTitle("Cadastro inicial indisponível");
         problem.setType(URI.create("https://estudalivre.local/problems/bootstrap-completed"));
+        return problem;
+    }
+
+    @ExceptionHandler(RegistrationClosedException.class)
+    ProblemDetail registrationClosed(RegistrationClosedException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, exception.getMessage());
+        problem.setTitle("Cadastro indisponível");
+        return problem;
+    }
+
+    @ExceptionHandler(DuplicateIdentityEmailException.class)
+    ProblemDetail duplicateEmail(DuplicateIdentityEmailException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+        problem.setTitle("E-mail já cadastrado");
+        return problem;
+    }
+
+    @ExceptionHandler(CurrentPasswordIncorrectException.class)
+    ProblemDetail currentPasswordIncorrect(CurrentPasswordIncorrectException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, exception.getMessage());
+        problem.setTitle("Senha atual incorreta");
+        return problem;
+    }
+
+    @ExceptionHandler(PasswordResetTokenInvalidException.class)
+    ProblemDetail invalidPasswordResetToken(PasswordResetTokenInvalidException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, exception.getMessage());
+        problem.setTitle("Link de redefinição inválido");
         return problem;
     }
 

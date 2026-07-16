@@ -37,3 +37,17 @@ test("uses the study rail for an authenticated desktop session", async ({ page }
   await expect(page.getByRole("heading", { name: "Seu espaço está protegido" })).toBeVisible();
   await expect(page.getByText("pessoa@example.com")).toBeVisible();
 });
+
+test("opens a password-reset link directly without horizontal overflow on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/redefinir-senha?token=token-operacional");
+
+  await expect(page.getByRole("heading", { name: "Defina uma nova senha" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Nova senha" })).toBeVisible();
+  await expect(page.getByLabel("E-mail")).toHaveCount(0);
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+});
