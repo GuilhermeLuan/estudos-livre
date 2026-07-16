@@ -29,7 +29,7 @@ function csrfToken() {
   return cookie ? decodeURIComponent(cookie.slice("XSRF-TOKEN=".length)) : undefined;
 }
 
-async function apiFetch(path: string, init: RequestInit = {}) {
+export async function apiFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
 
@@ -41,7 +41,7 @@ async function apiFetch(path: string, init: RequestInit = {}) {
   return fetch(path, { ...init, headers, credentials: "same-origin" });
 }
 
-async function requireSuccess(response: Response, fallbackMessage: string) {
+export async function requireSuccess(response: Response, fallbackMessage: string) {
   if (response.ok) return;
 
   let problem: ProblemDetails = {};
