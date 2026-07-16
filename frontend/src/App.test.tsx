@@ -584,6 +584,48 @@ describe("authentication journey", () => {
     expect(await screen.findByLabelText("Duração total do ciclo: 4h")).toBeVisible();
   });
 
+  it("summarizes the accumulated cycle time for each subject", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const cycle = {
+      id: "7a725fd0-2429-46a3-a786-f14ef87642a5",
+      name: "Ciclo equilibrado",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 135,
+      activatable: true,
+      stages: [
+        { id: "stage-portuguese-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 30, longBlockWarning: false },
+        { id: "stage-math", position: 2, subjectId: "subject-math", subjectName: "Matemática", targetMinutes: 60, longBlockWarning: false },
+        { id: "stage-portuguese-2", position: 3, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 45, longBlockWarning: false }
+      ],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-portuguese", name: "Língua Portuguesa", archived: false },
+        { id: "subject-math", name: "Matemática", archived: false }
+      ]);
+      if (url === "/api/study-cycles") return jsonResponse([cycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Ciclo equilibrado" }));
+
+    expect(await screen.findByRole("region", { name: "Total por matéria" })).toBeVisible();
+    expect(screen.getByLabelText("Total de Língua Portuguesa: 1h 15min")).toBeVisible();
+    expect(screen.getByText("2 aparições · 56% do ciclo")).toBeVisible();
+    expect(screen.getByLabelText("Total de Matemática: 1h")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Duração da etapa 1 em minutos"), { target: { value: "60" } });
+    expect(screen.getByLabelText("Total de Língua Portuguesa: 1h 45min")).toBeVisible();
+  });
+
   it("submits credentials as a form and opens the authenticated session", async () => {
     document.cookie = "XSRF-TOKEN=token-login; Path=/";
     const fetchMock = vi.fn()

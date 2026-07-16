@@ -172,6 +172,9 @@ test("edits a custom study cycle without horizontal overflow on a phone", async 
   await page.getByRole("button", { name: "Editar Ciclo intensivo" }).click();
   await expect(page.getByRole("heading", { name: "Monte a sequência" })).toBeVisible();
   await expect(page.getByText("Bloco longo: considere dividir esta matéria em mais aparições.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Total por matéria" })).toBeVisible();
+  await expect(page.getByLabel("Total de Língua Portuguesa: 30min")).toBeVisible();
+  await expect(page.getByLabel("Total de Matemática: 4h")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Navegação móvel" }).getByRole("link")).toHaveCount(3);
 
   const hasHorizontalOverflow = await page.evaluate(

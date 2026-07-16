@@ -236,10 +236,31 @@ function ProtectedStudyCyclesPage() {
   }
 
   function subjectName(subjectId: string) {
-    return subjects.data?.find((subject) => subject.id === subjectId)?.name ?? "Matéria";
+    return subjects.data?.find((subject) => subject.id === subjectId)?.name
+      ?? cycles.data?.find((cycle) => cycle.id === selectedCycleId)?.stages.find((stage) => stage.subjectId === subjectId)?.subjectName
+      ?? "Matéria";
   }
 
   const totalDraftMinutes = draftStages.reduce((total, stage) => total + (Number(stage.targetMinutes) || 0), 0);
+  const subjectTotals = Array.from(draftStages.reduce((totals, stage) => {
+    const total = totals.get(stage.subjectId);
+    if (total) {
+      total.totalMinutes += Number(stage.targetMinutes) || 0;
+      total.appearances += 1;
+    } else {
+      totals.set(stage.subjectId, {
+        subjectId: stage.subjectId,
+        subjectName: subjectName(stage.subjectId),
+        totalMinutes: Number(stage.targetMinutes) || 0,
+        appearances: 1
+      });
+    }
+    return totals;
+  }, new Map<string, { subjectId: string; subjectName: string; totalMinutes: number; appearances: number }>()).values())
+    .map((total) => ({
+      ...total,
+      percentage: totalDraftMinutes > 0 ? Math.round((total.totalMinutes / totalDraftMinutes) * 100) : 0
+    }));
   const stagesAreValid = draftStages.every((stage) => stage.targetMinutes > 0 && stage.targetMinutes % 5 === 0);
 
   if (auth.isPending) {
@@ -368,6 +389,36 @@ function ProtectedStudyCyclesPage() {
                 <button className="primary-button" type="submit" disabled={updateMutation.isPending || !draftName.trim() || !stagesAreValid}>{updateMutation.isPending ? "Salvando…" : "Salvar ciclo"}</button>
               </div>
             </form>
+            <section className="cycle-subject-totals" aria-labelledby="cycle-subject-totals-title">
+              <header className="cycle-subject-totals-header">
+                <div>
+                  <span className="card-kicker">Fechamento do ciclo</span>
+                  <h3 id="cycle-subject-totals-title">Total por matéria</h3>
+                  <p>Confira o tempo acumulado e a participação de cada matéria.</p>
+                </div>
+                <strong className="cycle-subject-count">{subjectTotals.length} {subjectTotals.length === 1 ? "matéria" : "matérias"}</strong>
+              </header>
+              {subjectTotals.length > 0 ? (
+                <ul className="cycle-subject-total-list">
+                  {subjectTotals.map((total) => (
+                    <li className="cycle-subject-total-row" key={total.subjectId}>
+                      <div className="cycle-subject-total-copy">
+                        <strong>{total.subjectName}</strong>
+                        <span>{total.appearances} {total.appearances === 1 ? "aparição" : "aparições"} · {total.percentage}% do ciclo</span>
+                      </div>
+                      <strong className="cycle-subject-total-value" aria-label={`Total de ${total.subjectName}: ${formatCycleMinutes(total.totalMinutes)}`}>
+                        {formatCycleMinutes(total.totalMinutes)}
+                      </strong>
+                      <span className="cycle-subject-share-track" aria-hidden="true">
+                        <span style={{ width: `${total.percentage}%` }} />
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="cycle-subject-totals-empty">Adicione etapas para ver a distribuição do ciclo por matéria.</p>
+              )}
+            </section>
           </section>
         )}
       </main>
