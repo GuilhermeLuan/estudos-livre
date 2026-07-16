@@ -136,6 +136,53 @@ test("opens a subject, creates content and keeps the catalog within a phone view
   expect(hasHorizontalOverflow).toBe(false);
 });
 
+test("edits a custom study cycle without horizontal overflow on a phone", async ({ page }) => {
+  const cycleId = "7a725fd0-2429-46a3-a786-f14ef87642a5";
+  await page.route("**/api/auth/bootstrap-status", async (route) => {
+    await route.fulfill({ json: { registrationRequired: false } });
+  });
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({ json: { id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" } });
+  });
+  await page.route("**/api/subjects?status=active", async (route) => {
+    await route.fulfill({ json: [
+      { id: "subject-portuguese", name: "Língua Portuguesa", archived: false },
+      { id: "subject-math", name: "Matemática", archived: false }
+    ] });
+  });
+  await page.route("**/api/study-cycles", async (route) => {
+    await route.fulfill({ json: [{
+      id: cycleId,
+      name: "Ciclo intensivo",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 270,
+      activatable: true,
+      stages: [
+        { id: "stage-portuguese", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 30, longBlockWarning: false },
+        { id: "stage-math", position: 2, subjectId: "subject-math", subjectName: "Matemática", targetMinutes: 240, longBlockWarning: true }
+      ],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    }] });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/ciclos");
+
+  await page.getByRole("button", { name: "Editar Ciclo intensivo" }).click();
+  await expect(page.getByRole("heading", { name: "Monte a sequência" })).toBeVisible();
+  await expect(page.getByText("Bloco longo: considere dividir esta matéria em mais aparições.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Total por matéria" })).toBeVisible();
+  await expect(page.getByLabel("Total de Língua Portuguesa: 30min")).toBeVisible();
+  await expect(page.getByLabel("Total de Matemática: 4h")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Navegação móvel" }).getByRole("link")).toHaveCount(3);
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+});
+
 test("opens a password-reset link directly without horizontal overflow on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/redefinir-senha?token=token-operacional");
