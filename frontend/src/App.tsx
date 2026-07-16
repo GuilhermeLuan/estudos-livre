@@ -23,6 +23,7 @@ import {
   StudyContent,
   updateContent
 } from "./content-api";
+import { createStudyCycle, listStudyCycles, StudyCycle, updateStudyCycle } from "./study-cycle-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -63,10 +64,21 @@ function ContentsIcon() {
   );
 }
 
+function CyclesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 5h12M6 12h12M6 19h12" />
+      <circle cx="4" cy="5" r="1" />
+      <circle cx="4" cy="12" r="1" />
+      <circle cx="4" cy="19" r="1" />
+    </svg>
+  );
+}
+
 function AppShell({ children, authenticated, activeSection, topbarMeta = "Identidade e acesso" }: {
   children: ReactNode;
   authenticated: boolean;
-  activeSection?: "subjects" | "account";
+  activeSection?: "subjects" | "cycles" | "account";
   topbarMeta?: string;
 }) {
   return (
@@ -79,6 +91,7 @@ function AppShell({ children, authenticated, activeSection, topbarMeta = "Identi
           {authenticated ? (
             <>
               <Link className={`nav-item ${activeSection === "subjects" ? "active" : ""}`} aria-current={activeSection === "subjects" ? "page" : undefined} to="/materias"><SubjectsIcon />Matérias</Link>
+              <Link className={`nav-item ${activeSection === "cycles" ? "active" : ""}`} aria-current={activeSection === "cycles" ? "page" : undefined} to="/ciclos"><CyclesIcon />Ciclos</Link>
               <Link className={`nav-item ${activeSection === "account" ? "active" : ""}`} aria-current={activeSection === "account" ? "page" : undefined} to="/conta"><LockIcon />Conta</Link>
             </>
           ) : (
@@ -104,12 +117,261 @@ function AppShell({ children, authenticated, activeSection, topbarMeta = "Identi
         {authenticated && (
           <nav className="mobile-nav" aria-label="Navegação móvel">
             <Link className={activeSection === "subjects" ? "active" : ""} aria-current={activeSection === "subjects" ? "page" : undefined} to="/materias"><SubjectsIcon />Matérias</Link>
+            <Link className={activeSection === "cycles" ? "active" : ""} aria-current={activeSection === "cycles" ? "page" : undefined} to="/ciclos"><CyclesIcon />Ciclos</Link>
             <Link className={activeSection === "account" ? "active" : ""} aria-current={activeSection === "account" ? "page" : undefined} to="/conta"><LockIcon />Conta</Link>
           </nav>
         )}
         {children}
       </section>
     </div>
+  );
+}
+
+function formatCycleMinutes(totalMinutes: number) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}min`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}min`;
+}
+
+type EditableCycleStage = {
+  key: string;
+  subjectId: string;
+  targetMinutes: number;
+};
+
+function ProtectedStudyCyclesPage() {
+  const queryClient = useQueryClient();
+  const [showCreate, setShowCreate] = useState(false);
+  const [cycleName, setCycleName] = useState("");
+  const [selectedCycleId, setSelectedCycleId] = useState<string>();
+  const [draftName, setDraftName] = useState("");
+  const [draftStages, setDraftStages] = useState<EditableCycleStage[]>([]);
+  const [nextStageKey, setNextStageKey] = useState(1);
+  const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
+  const cycles = useQuery({
+    queryKey: ["study-cycles"],
+    queryFn: listStudyCycles,
+    enabled: auth.data?.state === "authenticated",
+    staleTime: 30_000
+  });
+  const subjects = useQuery({
+    queryKey: ["subjects", "active"],
+    queryFn: () => listSubjects("active"),
+    enabled: auth.data?.state === "authenticated" && Boolean(selectedCycleId),
+    staleTime: 30_000
+  });
+
+  function editCycle(cycle: StudyCycle) {
+    setSelectedCycleId(cycle.id);
+    setDraftName(cycle.name);
+    setDraftStages(cycle.stages.map((stage) => ({
+      key: stage.id,
+      subjectId: stage.subjectId,
+      targetMinutes: stage.targetMinutes
+    })));
+  }
+
+  const createMutation = useMutation({
+    mutationFn: () => createStudyCycle(cycleName),
+    onSuccess: (created) => {
+      queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
+        [...current, created].sort((first, second) =>
+          first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+      );
+      setCycleName("");
+      setShowCreate(false);
+      editCycle(created);
+    }
+  });
+  const updateMutation = useMutation({
+    mutationFn: () => updateStudyCycle(
+      selectedCycleId!,
+      draftName,
+      draftStages.map(({ subjectId, targetMinutes }) => ({ subjectId, targetMinutes }))
+    ),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
+        current.map((cycle) => cycle.id === updated.id ? updated : cycle)
+      );
+      editCycle(updated);
+    }
+  });
+
+  function submitCycle(event: FormEvent) {
+    event.preventDefault();
+    createMutation.mutate();
+  }
+
+  function submitCycleStages(event: FormEvent) {
+    event.preventDefault();
+    updateMutation.mutate();
+  }
+
+  function addStage() {
+    const firstSubject = subjects.data?.[0];
+    if (!firstSubject) return;
+    setDraftStages((current) => [...current, {
+      key: `new-stage-${nextStageKey}`,
+      subjectId: firstSubject.id,
+      targetMinutes: 30
+    }]);
+    setNextStageKey((current) => current + 1);
+  }
+
+  function updateStage(index: number, patch: Partial<Omit<EditableCycleStage, "key">>) {
+    setDraftStages((current) => current.map((stage, stageIndex) =>
+      stageIndex === index ? { ...stage, ...patch } : stage
+    ));
+  }
+
+  function moveStage(index: number, direction: -1 | 1) {
+    const target = index + direction;
+    if (target < 0 || target >= draftStages.length) return;
+    setDraftStages((current) => {
+      const reordered = [...current];
+      [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
+      return reordered;
+    });
+  }
+
+  function subjectName(subjectId: string) {
+    return subjects.data?.find((subject) => subject.id === subjectId)?.name ?? "Matéria";
+  }
+
+  const totalDraftMinutes = draftStages.reduce((total, stage) => total + (Number(stage.targetMinutes) || 0), 0);
+  const stagesAreValid = draftStages.every((stage) => stage.targetMinutes > 0 && stage.targetMinutes % 5 === 0);
+
+  if (auth.isPending) {
+    return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
+  }
+  if (auth.isError || auth.data?.state !== "authenticated") {
+    return <Navigate to="/" replace />;
+  }
+
+  return (
+    <AppShell authenticated activeSection="cycles" topbarMeta="Planejamento personalizado">
+      <main className="content subjects-content cycle-content">
+        <div className="page-heading subjects-heading">
+          <div>
+            <span className="eyebrow">Sua ordem de estudo</span>
+            <h1>Ciclos de estudo</h1>
+            <p>Monte sequências flexíveis e distribua seu tempo entre as matérias.</p>
+          </div>
+          <button className="primary-button" type="button" onClick={() => setShowCreate(true)} disabled={showCreate}>Novo ciclo</button>
+        </div>
+        {showCreate && (
+          <section className="subject-composer cycle-composer" aria-labelledby="new-cycle-title">
+            <div>
+              <span className="card-kicker">Novo rascunho</span>
+              <h2 id="new-cycle-title">Nomeie seu ciclo</h2>
+              <p>Você poderá montar e reorganizar as etapas logo depois.</p>
+            </div>
+            <form className="subject-form" onSubmit={submitCycle}>
+              <label>Nome do ciclo<input autoFocus required maxLength={120} value={cycleName} onChange={(event) => setCycleName(event.target.value)} /></label>
+              {createMutation.isError && <p className="form-error" role="alert">{createMutation.error instanceof ApiError ? createMutation.error.message : "Não foi possível criar o ciclo."}</p>}
+              <div className="form-actions">
+                <button className="secondary-button" type="button" onClick={() => { setShowCreate(false); setCycleName(""); }}>Cancelar</button>
+                <button className="primary-button" type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? "Criando…" : "Criar rascunho"}</button>
+              </div>
+            </form>
+          </section>
+        )}
+        {cycles.isPending && (
+          <section className="subjects-loading" aria-busy="true" aria-live="polite">
+            {[0, 1].map((item) => <span className="subject-row-skeleton skeleton" key={item} />)}
+            <span className="sr-only">Carregando ciclos</span>
+          </section>
+        )}
+        {cycles.isError && (
+          <section className="subjects-error" role="alert">
+            <span className="subject-bookmark error-bookmark" aria-hidden="true"><CyclesIcon /></span>
+            <div><h2>Seus ciclos não puderam ser abertos</h2><p>Verifique a conexão e tente novamente.</p></div>
+            <button className="secondary-button" type="button" onClick={() => void cycles.refetch()}>Tentar novamente</button>
+          </section>
+        )}
+        {cycles.data?.length === 0 && (
+          <section className="subjects-empty">
+            <span className="empty-bookmark" aria-hidden="true"><CyclesIcon /></span>
+            <h2>Seu primeiro ciclo começa aqui</h2>
+            <p>Crie um rascunho e organize as matérias na ordem que funciona para você.</p>
+          </section>
+        )}
+        {cycles.data && cycles.data.length > 0 && (
+          <section className="cycle-draft-list" aria-label="Rascunhos de ciclos">
+            {cycles.data.map((cycle) => (
+              <article className="cycle-draft-card" key={cycle.id}>
+                <span className="cycle-card-mark" aria-hidden="true"><CyclesIcon /></span>
+                <div>
+                  <span className="card-kicker">Rascunho</span>
+                  <h2>{cycle.name}</h2>
+                  <p>{cycle.stages.length} {cycle.stages.length === 1 ? "etapa" : "etapas"}</p>
+                </div>
+                <strong className="cycle-total">{formatCycleMinutes(cycle.totalMinutes)}</strong>
+                <button className="secondary-button cycle-edit-button" type="button" aria-label={`Editar ${cycle.name}`} onClick={() => editCycle(cycle)}>Editar</button>
+              </article>
+            ))}
+          </section>
+        )}
+        {selectedCycleId && (
+          <section className="cycle-workbench" aria-labelledby="cycle-editor-title">
+            <header className="cycle-workbench-header">
+              <div>
+                <span className="card-kicker">Editor do rascunho</span>
+                <h2 id="cycle-editor-title">Monte a sequência</h2>
+                <p>Repita matérias quando quiser e ajuste a ordem ao seu ritmo.</p>
+              </div>
+              <div className="cycle-running-total" aria-label={`Duração total do ciclo: ${formatCycleMinutes(totalDraftMinutes)}`}>
+                <span>Total do ciclo</span>
+                <strong>{formatCycleMinutes(totalDraftMinutes)}</strong>
+              </div>
+            </header>
+            <form className="cycle-editor-form" onSubmit={submitCycleStages}>
+              <label className="cycle-name-field">Nome do ciclo<input required maxLength={120} value={draftName} onChange={(event) => setDraftName(event.target.value)} /></label>
+              {subjects.isPending && <p className="cycle-subject-state" aria-live="polite">Abrindo suas matérias…</p>}
+              {subjects.isError && <p className="form-error" role="alert">Não foi possível carregar as matérias ativas.</p>}
+              {subjects.data?.length === 0 && (
+                <p className="cycle-subject-state">Crie ou restaure uma matéria ativa antes de adicionar etapas.</p>
+              )}
+              <div className="cycle-stage-list">
+                {draftStages.map((stage, index) => {
+                  const currentSubjectName = subjectName(stage.subjectId);
+                  return (
+                    <article className="cycle-stage-card" key={stage.key}>
+                      <div className="cycle-stage-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</div>
+                      <div className="cycle-stage-fields">
+                        <label>Matéria da etapa {index + 1}
+                          <select value={stage.subjectId} onChange={(event) => updateStage(index, { subjectId: event.target.value })}>
+                            {subjects.data?.map((subject) => <option value={subject.id} key={subject.id}>{subject.name}</option>)}
+                          </select>
+                        </label>
+                        <label>Duração da etapa {index + 1} em minutos
+                          <input type="number" required min={5} step={5} value={stage.targetMinutes} onChange={(event) => updateStage(index, { targetMinutes: Number(event.target.value) })} />
+                        </label>
+                        {stage.targetMinutes > 180 && <p className="cycle-long-warning" role="alert">Bloco longo: considere dividir esta matéria em mais aparições.</p>}
+                      </div>
+                      <div className="cycle-stage-actions" aria-label={`Ordenar ou remover ${currentSubjectName}`}>
+                        <button type="button" aria-label={`Mover ${currentSubjectName} para cima`} onClick={() => moveStage(index, -1)} disabled={index === 0}>↑</button>
+                        <button type="button" aria-label={`Mover ${currentSubjectName} para baixo`} onClick={() => moveStage(index, 1)} disabled={index === draftStages.length - 1}>↓</button>
+                        <button className="remove-stage-button" type="button" aria-label={`Remover ${currentSubjectName}`} onClick={() => setDraftStages((current) => current.filter((_, stageIndex) => stageIndex !== index))}>Remover</button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              {draftStages.length === 0 && <p className="cycle-empty-hint">Adicione pelo menos uma etapa para que este ciclo possa ser ativado depois.</p>}
+              <button className="cycle-add-stage" type="button" aria-label="Adicionar etapa" onClick={addStage} disabled={!subjects.data?.length}>+ Adicionar etapa</button>
+              {updateMutation.isError && <p className="form-error" role="alert">{updateMutation.error instanceof ApiError ? updateMutation.error.message : "Não foi possível salvar o ciclo."}</p>}
+              {updateMutation.isSuccess && <p className="form-success" role="status">Ciclo salvo.</p>}
+              <div className="cycle-editor-actions">
+                <button className="secondary-button" type="button" onClick={() => setSelectedCycleId(undefined)}>Fechar editor</button>
+                <button className="primary-button" type="submit" disabled={updateMutation.isPending || !draftName.trim() || !stagesAreValid}>{updateMutation.isPending ? "Salvando…" : "Salvar ciclo"}</button>
+              </div>
+            </form>
+          </section>
+        )}
+      </main>
+    </AppShell>
   );
 }
 
@@ -897,6 +1159,7 @@ export function App() {
         <Route path="/" element={<CredentialHome />} />
         <Route path="/materias" element={<ProtectedSubjectsPage />} />
         <Route path="/materias/:subjectId/conteudos" element={<ProtectedContentsPage />} />
+        <Route path="/ciclos" element={<ProtectedStudyCyclesPage />} />
         <Route path="/conta" element={<ProtectedAccountPage />} />
         <Route path="/redefinir-senha" element={<PasswordResetPage />} />
       </Routes>

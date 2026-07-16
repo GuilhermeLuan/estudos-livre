@@ -439,6 +439,151 @@ describe("authentication journey", () => {
     expect(await screen.findByRole("heading", { name: "Seu catálogo começa aqui" })).toBeVisible();
   });
 
+  it("opens the authenticated custom cycle workspace with the user's drafts", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") {
+        return jsonResponse({ registrationRequired: false });
+      }
+      if (url === "/api/auth/me") {
+        return jsonResponse({
+          id: "d0508bf2-7d0e-467b-a720-b472f43ddf66",
+          email: "pessoa@example.com",
+          timeZone: "America/Sao_Paulo"
+        });
+      }
+      if (url === "/api/study-cycles") {
+        return jsonResponse([{
+          id: "7a725fd0-2429-46a3-a786-f14ef87642a5",
+          name: "Ciclo pós-edital",
+          mode: "CUSTOM",
+          status: "DRAFT",
+          totalMinutes: 150,
+          activatable: true,
+          stages: [],
+          createdAt: "2026-07-16T12:00:00Z",
+          updatedAt: "2026-07-16T12:00:00Z"
+        }]);
+      }
+      if (url === "/api/subjects?status=active") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Ciclos de estudo" })).toBeVisible();
+    expect(await screen.findByText("Ciclo pós-edital")).toBeVisible();
+    expect(screen.getByText("2h 30min")).toBeVisible();
+    expect(screen.getByText("Rascunho")).toBeVisible();
+    expect(screen.getAllByRole("link", { name: "Ciclos" })[0]).toHaveAttribute("aria-current", "page");
+  });
+
+  it("creates a named custom cycle draft without leaving the workspace", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-ciclo; Path=/";
+    const createdCycle = {
+      id: "7a725fd0-2429-46a3-a786-f14ef87642a5",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 0,
+      activatable: false,
+      stages: [],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-cycles" && init?.method === "POST") return jsonResponse(createdCycle, 201);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Novo ciclo" }));
+    fireEvent.change(screen.getByLabelText("Nome do ciclo"), { target: { value: "Reta final" } });
+    fireEvent.click(screen.getByRole("button", { name: "Criar rascunho" }));
+
+    expect(await screen.findByText("Reta final")).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith("/api/study-cycles", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("adds removes reorders and saves custom cycle stages with a long-block warning", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-etapas; Path=/";
+    const cycle = {
+      id: "7a725fd0-2429-46a3-a786-f14ef87642a5",
+      name: "Ciclo intensivo",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 0,
+      activatable: false,
+      stages: [],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const subjects = [
+      { id: "subject-portuguese", name: "Língua Portuguesa", archived: false },
+      { id: "subject-math", name: "Matemática", archived: false }
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse(subjects);
+      if (url === `/api/study-cycles/${cycle.id}` && init?.method === "PUT") {
+        return jsonResponse({
+          ...cycle,
+          totalMinutes: 240,
+          activatable: true,
+          stages: [{
+            id: "stage-math",
+            position: 1,
+            subjectId: "subject-math",
+            subjectName: "Matemática",
+            targetMinutes: 240,
+            longBlockWarning: true
+          }]
+        });
+      }
+      if (url === "/api/study-cycles") return jsonResponse([cycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Ciclo intensivo" }));
+    const addStageButton = await screen.findByRole("button", { name: "Adicionar etapa" });
+    await waitFor(() => expect(addStageButton).toBeEnabled());
+    fireEvent.click(addStageButton);
+    fireEvent.click(addStageButton);
+    fireEvent.change(screen.getByLabelText("Matéria da etapa 2"), { target: { value: "subject-math" } });
+    fireEvent.change(screen.getByLabelText("Duração da etapa 2 em minutos"), { target: { value: "240" } });
+
+    expect(screen.getByText("Bloco longo: considere dividir esta matéria em mais aparições.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Mover Matemática para cima" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remover Língua Portuguesa" }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar ciclo" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/study-cycles/${cycle.id}`,
+      expect.objectContaining({ method: "PUT" })
+    ));
+    const updateCall = fetchMock.mock.calls.find(([url, init]) =>
+      url === `/api/study-cycles/${cycle.id}` && init?.method === "PUT"
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({
+      name: "Ciclo intensivo",
+      stages: [{ subjectId: "subject-math", targetMinutes: 240 }]
+    });
+    expect(await screen.findByLabelText("Duração total do ciclo: 4h")).toBeVisible();
+  });
+
   it("submits credentials as a form and opens the authenticated session", async () => {
     document.cookie = "XSRF-TOKEN=token-login; Path=/";
     const fetchMock = vi.fn()

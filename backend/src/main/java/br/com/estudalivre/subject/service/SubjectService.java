@@ -42,6 +42,15 @@ public class SubjectService {
         return SubjectResponse.from(findOwned(subjectId, ownerId));
     }
 
+    @Transactional(readOnly = true)
+    public SubjectResponse getActive(UUID ownerId, UUID subjectId) {
+        Subject subject = findOwned(subjectId, ownerId);
+        if (subject.archived()) {
+            throw new SubjectNotFoundException();
+        }
+        return SubjectResponse.from(subject);
+    }
+
     @Transactional
     public SubjectResponse update(UUID ownerId, UUID subjectId, SubjectNameRequest request) {
         if (subjectRepository.updateName(subjectId, ownerId, request.name()) == 0) {
