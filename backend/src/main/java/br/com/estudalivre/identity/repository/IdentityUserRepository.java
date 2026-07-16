@@ -53,4 +53,30 @@ public class IdentityUserRepository {
                         resultSet.getString("time_zone")))
                 .optional();
     }
+
+    public Optional<IdentityUser> findById(UUID id) {
+        return jdbcClient.sql("""
+                        SELECT id, email, password_hash, time_zone
+                        FROM identity_user
+                        WHERE id = :id
+                        """)
+                .param("id", id)
+                .query((resultSet, rowNumber) -> new IdentityUser(
+                        resultSet.getObject("id", UUID.class),
+                        resultSet.getString("email"),
+                        resultSet.getString("password_hash"),
+                        resultSet.getString("time_zone")))
+                .optional();
+    }
+
+    public void updatePassword(UUID id, String passwordHash) {
+        jdbcClient.sql("""
+                        UPDATE identity_user
+                        SET password_hash = :passwordHash, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                        """)
+                .param("id", id)
+                .param("passwordHash", passwordHash)
+                .update();
+    }
 }

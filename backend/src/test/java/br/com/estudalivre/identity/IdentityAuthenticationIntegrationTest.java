@@ -47,7 +47,27 @@ class IdentityAuthenticationIntegrationTest {
     void emptyInstallationRequiresBootstrap() throws Exception {
         mockMvc.perform(get("/api/auth/bootstrap-status"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.registrationRequired").value(true));
+                .andExpect(jsonPath("$.registrationRequired").value(true))
+                .andExpect(jsonPath("$.registrationEnabled").value(false));
+    }
+
+    @Test
+    void publicRegistrationIsClosedByDefault() throws Exception {
+        Cookie csrfCookie = csrfCookie();
+
+        mockMvc.perform(post("/api/auth/register")
+                        .cookie(csrfCookie)
+                        .header("X-XSRF-TOKEN", csrfCookie.getValue())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "email": "pessoa@example.com",
+                                  "password": "uma frase senha segura",
+                                  "timeZone": "America/Sao_Paulo"
+                                }
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.title").value("Cadastro indisponível"));
     }
 
     @Test
@@ -269,6 +289,85 @@ class IdentityAuthenticationIntegrationTest {
     }
 
     @Test
+    void changingPasswordKeepsOnlyTheRequestingSessionValid() throws Exception {
+        Cookie firstCsrf = csrfCookie();
+        Cookie secondCsrf = csrfCookie();
+        bootstrapFirstAccount("pessoa@example.com", "America/Sao_Paulo", firstCsrf)
+                .andExpect(status().isCreated());
+
+        Cookie firstSession = login("pessoa@example.com", firstCsrf)
+                .getResponse().getCookie("SESSION");
+        Cookie secondSession = login("pessoa@example.com", secondCsrf)
+                .getResponse().getCookie("SESSION");
+        Cookie refreshedCsrf = mockMvc.perform(get("/api/auth/me").cookie(firstSession))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        mockMvc.perform(post("/api/auth/password/change")
+                        .cookie(firstSession, refreshedCsrf)
+                        .header("X-XSRF-TOKEN", refreshedCsrf.getValue())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "currentPassword": "uma frase senha segura",
+                                  "newPassword": "uma nova frase senha segura"
+                                }
+                                """))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/auth/me").cookie(firstSession))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/auth/me").cookie(secondSession))
+                .andExpect(status().isUnauthorized());
+
+        Cookie oldLoginCsrf = csrfCookie();
+        mockMvc.perform(post("/api/auth/login")
+                        .cookie(oldLoginCsrf)
+                        .header("X-XSRF-TOKEN", oldLoginCsrf.getValue())
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("email", "pessoa@example.com")
+                        .param("password", "uma frase senha segura"))
+                .andExpect(status().isUnauthorized());
+
+        Cookie newLoginCsrf = csrfCookie();
+        mockMvc.perform(post("/api/auth/login")
+                        .cookie(newLoginCsrf)
+                        .header("X-XSRF-TOKEN", newLoginCsrf.getValue())
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("email", "pessoa@example.com")
+                        .param("password", "uma nova frase senha segura"))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void incorrectCurrentPasswordDoesNotChangeTheStoredPassword() throws Exception {
+        Cookie csrf = csrfCookie();
+        bootstrapFirstAccount("pessoa@example.com", "America/Sao_Paulo", csrf)
+                .andExpect(status().isCreated());
+        Cookie session = login("pessoa@example.com", csrf)
+                .getResponse().getCookie("SESSION");
+        Cookie refreshedCsrf = mockMvc.perform(get("/api/auth/me").cookie(session))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        mockMvc.perform(post("/api/auth/password/change")
+                        .cookie(session, refreshedCsrf)
+                        .header("X-XSRF-TOKEN", refreshedCsrf.getValue())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "currentPassword": "senha atual incorreta",
+                                  "newPassword": "uma nova frase senha segura"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Senha atual incorreta"));
+
+        loginExpecting("uma frase senha segura", status().isNoContent());
+        loginExpecting("uma nova frase senha segura", status().isUnauthorized());
+    }
+
+    @Test
     void bootstrapClosesAfterTheFirstAccount() throws Exception {
         bootstrapFirstAccount("primeira@example.com", "America/Sao_Paulo")
                 .andExpect(status().isCreated());
@@ -347,5 +446,18 @@ class IdentityAuthenticationIntegrationTest {
                 .andExpect(status().isNoContent())
                 .andExpect(cookie().exists("SESSION"))
                 .andReturn();
+    }
+
+    private void loginExpecting(
+            String password,
+            org.springframework.test.web.servlet.ResultMatcher statusMatcher) throws Exception {
+        Cookie csrf = csrfCookie();
+        mockMvc.perform(post("/api/auth/login")
+                        .cookie(csrf)
+                        .header("X-XSRF-TOKEN", csrf.getValue())
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("email", "pessoa@example.com")
+                        .param("password", password))
+                .andExpect(statusMatcher);
     }
 }
