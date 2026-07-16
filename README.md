@@ -13,6 +13,10 @@ docker compose up --build -d
 
 Acesse <http://localhost:8080>. O Compose inicia apenas `app` e `postgres`; espera o PostgreSQL ficar saudável, aplica as migrações Flyway e só então publica a aplicação como pronta.
 
+No primeiro acesso, a interface solicita a criação da conta inicial. Depois disso, o cadastro inicial é fechado e o acesso passa a exigir e-mail e senha. As sessões são armazenadas no PostgreSQL, expiram após `SESSION_TIMEOUT` (30 minutos por padrão) e podem ser encerradas pela própria interface.
+
+Se a aplicação estiver atrás de um proxy reverso HTTPS confiável, defina `SERVER_FORWARD_HEADERS_STRATEGY=framework` para que o Spring reconheça `X-Forwarded-Proto` e marque o cookie de sessão como `Secure`. Mantenha o valor `none` quando a aplicação estiver exposta diretamente, sem um proxy que sobrescreva os cabeçalhos encaminhados.
+
 Verificações operacionais:
 
 ```bash
@@ -32,7 +36,7 @@ docker compose down
 
 ## Desenvolvimento
 
-Backend (Java 21 e Maven 3.6.3+):
+Backend (Java 25 e Maven 3.6.3+):
 
 ```bash
 mvn test
