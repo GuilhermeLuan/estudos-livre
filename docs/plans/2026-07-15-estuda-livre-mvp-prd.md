@@ -42,7 +42,7 @@ Ao finalizar uma sessão com conteúdo, o usuário poderá criar uma sequência 
 13. Como usuário, quero criar vários ciclos, para que eu possa guardar planejamentos diferentes.
 14. Como usuário, quero manter somente um ciclo ativo, para que o sistema saiba inequivocamente onde creditar meu estudo.
 15. Como usuário, quero desativar um ciclo e ativar outro, para que eu possa mudar de foco.
-16. Como usuário, quero reativar um ciclo e retomar sua volta do ponto em que parei, para que a troca de foco não apague progresso.
+16. Como usuário, quero escolher entre pausar ou encerrar antecipadamente a volta ao trocar de ciclo, para que eu controle se retomarei o progresso ou começarei uma nova volta depois.
 17. Como usuário, quero criar um ciclo sugerido informando questões, peso e dificuldade das matérias, para que o sistema distribua meu tempo automaticamente.
 18. Como usuário, quero entender os dados usados na sugestão, para que o planejamento seja explicável.
 19. Como usuário, quero que todas as matérias recebam um tempo mínimo, para que nenhuma seja eliminada pela ponderação.
@@ -56,8 +56,8 @@ Ao finalizar uma sessão com conteúdo, o usuário poderá criar uma sequência 
 27. Como usuário, quero editar o ciclo atual sem criar uma versão nova visível, para que ajustes cotidianos sejam simples.
 28. Como usuário, quero que uma edição do ciclo redistribua o tempo da volta atual, para que o progresso já conquistado seja preservado.
 29. Como usuário, quero que voltas concluídas guardem o planejamento utilizado, para que o histórico continue compreensível após mudanças.
-30. Como usuário, quero visualizar a etapa atual, a meta, o tempo realizado e o restante, para que eu saiba o que estudar agora.
-31. Como usuário, quero iniciar uma sessão a partir da etapa do ciclo, para que o tempo seja associado à matéria correta.
+30. Como usuário, quero visualizar o fluxo completo, a sugestão, a meta, o tempo realizado e o restante de cada atividade, para que eu escolha livremente o que estudar agora.
+31. Como usuário, quero iniciar uma sessão a partir de qualquer atividade do ciclo, para que o tempo seja associado à ocorrência escolhida.
 32. Como usuário, quero selecionar opcionalmente um conteúdo ao iniciar uma sessão comum, para que eu possa estudar a matéria mesmo sem detalhar o assunto.
 33. Como usuário, quero registrar no máximo um conteúdo por sessão, para que métricas e revisões continuem precisas.
 34. Como usuário, quero iniciar, pausar, retomar e finalizar um cronômetro, para que apenas o tempo líquido seja contabilizado.
@@ -115,7 +115,8 @@ Ao finalizar uma sessão com conteúdo, o usuário poderá criar uma sequência 
 
 ### Planejador do ciclo
 
-- Um usuário pode cadastrar vários ciclos, mas somente um pode estar ativo. Trocar de ciclo torna o anterior inativo; reativá-lo retoma sua volta incompleta.
+- Um usuário pode cadastrar vários ciclos, mas somente um pode estar ativo. Trocar de ciclo torna o anterior inativo; reativá-lo retoma a volta pausada ou cria uma nova volta se a anterior foi encerrada.
+- Não existe percentual mínimo para trocar de ciclo. O usuário escolhe entre pausar a volta para retomá-la depois ou encerrá-la antecipadamente para começar uma nova volta no retorno.
 - Ciclos têm modo `SUGGESTED` ou `CUSTOM`. Editar diretamente etapas de um ciclo sugerido muda seu modo para personalizado.
 - No modo sugerido, a duração total é duas horas por matéria, limitada ao intervalo de 10 a 30 horas.
 - A prioridade base de uma matéria é a quantidade de questões multiplicada pelo peso. O resultado é multiplicado pelo fator de dificuldade: fácil 1,00; média 1,25; difícil 1,50.
@@ -129,7 +130,9 @@ Ao finalizar uma sessão com conteúdo, o usuário poderá criar uma sequência 
 
 ### Voltas, créditos e recálculo
 
-- A volta é contínua. Concluir a última etapa encerra a volta e cria automaticamente a próxima.
+- A ordem do ciclo é uma sugestão de planejamento, não um cursor obrigatório. O usuário pode lançar estudo em qualquer atividade da volta.
+- Quando uma atividade é escolhida explicitamente, o crédito começa nela. Quando somente a matéria é informada, o crédito começa na primeira atividade incompleta dessa matéria.
+- A volta é contínua. Quando todas as metas das atividades forem preenchidas, ela é concluída e a próxima volta é criada automaticamente.
 - Sessões parciais acumulam duração na primeira etapa incompleta da mesma matéria.
 - O excedente é aplicado às próximas etapas da mesma matéria, somente dentro da mesma volta. O restante que não couber permanece nas métricas, mas não avança a volta seguinte.
 - Etapas preenchidas antecipadamente são consideradas concluídas e ignoradas automaticamente quando alcançadas pela ordem do ciclo.
@@ -214,8 +217,8 @@ Ao finalizar uma sessão com conteúdo, o usuário poderá criar uma sequência 
 
 ## Further Notes
 
-- “Ciclo atual” significa o ciclo `ACTIVE`. A troca para outro ciclo o torna inativo, não concluído; reativá-lo retoma seu progresso.
-- “Volta” é uma execução completa e contínua das etapas de um ciclo. Não corresponde a uma semana do calendário.
+- “Ciclo atual” significa o ciclo `ACTIVE`. A troca para outro ciclo o torna inativo e exige escolher entre pausar ou encerrar a volta aberta.
+- “Volta” é uma execução identificada do planejamento. Ela pode ser pausada, concluída ou encerrada antecipadamente e não corresponde a uma semana do calendário.
 - “Etapa” sempre referencia uma matéria. O conteúdo é escolhido no início da sessão e nunca participa diretamente da ordenação do ciclo.
 - A edição livre dos dados é intencional. O produto não é uma competição nem um sistema de certificação; integridade significa manter os cálculos coerentes com o que o usuário decidiu registrar.
 - O algoritmo sugerido deve ser explicável e determinístico: as mesmas entradas geram o mesmo planejamento.

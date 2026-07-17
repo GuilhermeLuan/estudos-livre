@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -480,6 +480,147 @@ describe("authentication journey", () => {
     expect(screen.getAllByRole("link", { name: "Ciclos" })[0]).toHaveAttribute("aria-current", "page");
   });
 
+  it("shows the complete active flow without imposing a current stage", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-ativacao; Path=/";
+    const activeCycle = {
+      id: "cycle-active",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "ACTIVE",
+      totalMinutes: 150,
+      activatable: true,
+      currentRun: { id: "run-active", number: 3, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z" },
+      stages: [
+        { id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 60, longBlockWarning: false },
+        { id: "stage-2", position: 2, subjectId: "subject-2", subjectName: "Matemática", targetMinutes: 45, longBlockWarning: false },
+        { id: "stage-3", position: 3, subjectId: "subject-1", subjectName: "Português", targetMinutes: 45, longBlockWarning: false }
+      ],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const pausedCycle = {
+      ...activeCycle,
+      id: "cycle-paused",
+      name: "Manutenção",
+      status: "INACTIVE",
+      currentRun: { id: "run-paused", number: 1, status: "PAUSED", startedAt: "2026-07-15T12:00:00Z" }
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-cycles") return jsonResponse([activeCycle, pausedCycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const activeRegion = await screen.findByRole("region", { name: "Ciclo ativo" });
+    expect(within(activeRegion).getByRole("heading", { name: "Reta final" })).toBeVisible();
+    expect(within(activeRegion).getByText("Volta 3")).toBeVisible();
+    const flow = within(activeRegion).getByRole("list", { name: "Fluxo completo da volta" });
+    expect(within(flow).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(flow).getAllByText("Português")).toHaveLength(2);
+    expect(within(flow).getByText("Matemática")).toBeVisible();
+    expect(within(flow).getByText("Sugestão")).toBeVisible();
+    expect(within(activeRegion).queryByText("Etapa atual")).not.toBeInTheDocument();
+  });
+
+  it("asks how to switch cycles and pauses the current run when chosen", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-troca; Path=/";
+    const activeCycle = {
+      id: "cycle-active",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "ACTIVE",
+      totalMinutes: 105,
+      activatable: true,
+      currentRun: { id: "run-active", number: 3, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z" },
+      stages: [{ id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 105, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const targetCycle = {
+      ...activeCycle,
+      id: "cycle-target",
+      name: "Manutenção",
+      status: "INACTIVE",
+      currentRun: { id: "run-target", number: 1, status: "PAUSED", startedAt: "2026-07-15T12:00:00Z" }
+    };
+    const resumedCycle = {
+      ...targetCycle,
+      status: "ACTIVE",
+      currentRun: { ...targetCycle.currentRun, status: "IN_PROGRESS" }
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-cycles/cycle-target/activate" && init?.method === "POST") return jsonResponse(resumedCycle);
+      if (url === "/api/study-cycles") return jsonResponse([activeCycle, targetCycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Retomar Manutenção" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Como deseja trocar de ciclo?" });
+    expect(within(dialog).getByText(/Reta final/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Encerrar volta e trocar" })).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/study-cycles/cycle-target/activate",
+      expect.anything()
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pausar e trocar" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-cycles/cycle-target/activate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ currentRunAction: "PAUSE" })
+      })
+    ));
+    const resumedRegion = await screen.findByRole("region", { name: "Ciclo ativo" });
+    expect(within(resumedRegion).getByRole("heading", { name: "Manutenção" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps an active cycle editable but prevents saving it without activities", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const activeCycle = {
+      id: "cycle-active",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "ACTIVE",
+      totalMinutes: 60,
+      activatable: true,
+      currentRun: { id: "run-active", number: 1, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z" },
+      stages: [{ id: "stage-math", position: 1, subjectId: "subject-math", subjectName: "Matemática", targetMinutes: 60, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse([{ id: "subject-math", name: "Matemática", archived: false }]);
+      if (url === "/api/study-cycles") return jsonResponse([activeCycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Reta final" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Remover Matemática" }));
+
+    expect(screen.getByText("O ciclo ativo precisa manter pelo menos uma atividade.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Salvar ciclo" })).toBeDisabled();
+  });
+
   it("creates a named custom cycle draft without leaving the workspace", async () => {
     window.history.pushState({}, "", "/ciclos");
     document.cookie = "XSRF-TOKEN=token-ciclo; Path=/";
@@ -558,12 +699,12 @@ describe("authentication journey", () => {
 
     renderApp();
     fireEvent.click(await screen.findByRole("button", { name: "Editar Ciclo intensivo" }));
-    const addStageButton = await screen.findByRole("button", { name: "Adicionar etapa" });
+    const addStageButton = await screen.findByRole("button", { name: "Adicionar atividade" });
     await waitFor(() => expect(addStageButton).toBeEnabled());
     fireEvent.click(addStageButton);
     fireEvent.click(addStageButton);
-    fireEvent.change(screen.getByLabelText("Matéria da etapa 2"), { target: { value: "subject-math" } });
-    fireEvent.change(screen.getByLabelText("Duração da etapa 2 em minutos"), { target: { value: "240" } });
+    fireEvent.change(screen.getByLabelText("Matéria da atividade 2"), { target: { value: "subject-math" } });
+    fireEvent.change(screen.getByLabelText("Duração da atividade 2 em minutos"), { target: { value: "240" } });
 
     expect(screen.getByText("Bloco longo: considere dividir esta matéria em mais aparições.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Mover Matemática para cima" }));
@@ -622,7 +763,7 @@ describe("authentication journey", () => {
     expect(screen.getByText("2 aparições · 56% do ciclo")).toBeVisible();
     expect(screen.getByLabelText("Total de Matemática: 1h")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Duração da etapa 1 em minutos"), { target: { value: "60" } });
+    fireEvent.change(screen.getByLabelText("Duração da atividade 1 em minutos"), { target: { value: "60" } });
     expect(screen.getByLabelText("Total de Língua Portuguesa: 1h 45min")).toBeVisible();
   });
 

@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -23,7 +23,7 @@ import {
   StudyContent,
   updateContent
 } from "./content-api";
-import { createStudyCycle, listStudyCycles, StudyCycle, updateStudyCycle } from "./study-cycle-api";
+import { activateStudyCycle, createStudyCycle, CycleSwitchAction, listStudyCycles, StudyCycle, updateStudyCycle } from "./study-cycle-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -140,6 +140,55 @@ type EditableCycleStage = {
   targetMinutes: number;
 };
 
+function CycleSwitchDialog({ currentCycle, targetCycle, pending, error, onCancel, onChoose }: {
+  currentCycle: StudyCycle;
+  targetCycle: StudyCycle;
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onChoose: (action: CycleSwitchAction) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="cycle-switch-dialog" ref={dialogRef} aria-labelledby="cycle-switch-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
+      <div className="cycle-switch-panel">
+        <header>
+          <span className="cycle-switch-mark" aria-hidden="true"><CyclesIcon /></span>
+          <div><span className="card-kicker">Troca livre</span><h2 id="cycle-switch-title">Como deseja trocar de ciclo?</h2></div>
+        </header>
+        <p className="cycle-switch-summary">Você vai sair de <strong>{currentCycle.name}</strong> e ativar <strong>{targetCycle.name}</strong>. Não há percentual mínimo para fazer essa troca.</p>
+        <div className="cycle-switch-options">
+          <section>
+            <strong>Pausar a volta</strong>
+            <p>Guarda o progresso atual para você continuar quando voltar.</p>
+          </section>
+          <section className="cycle-switch-abandon-option">
+            <strong>Encerrar esta volta</strong>
+            <p>Preserva o histórico, mas a próxima ativação começa uma volta nova.</p>
+          </section>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Cancelar</button>
+          <button className="danger-button" type="button" onClick={() => onChoose("ABANDON")} disabled={pending}>Encerrar volta e trocar</button>
+          <button className="primary-button" type="button" autoFocus onClick={() => onChoose("PAUSE")} disabled={pending}>{pending ? "Trocando…" : "Pausar e trocar"}</button>
+        </footer>
+      </div>
+    </dialog>
+  );
+}
+
 function ProtectedStudyCyclesPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
@@ -148,6 +197,7 @@ function ProtectedStudyCyclesPage() {
   const [draftName, setDraftName] = useState("");
   const [draftStages, setDraftStages] = useState<EditableCycleStage[]>([]);
   const [nextStageKey, setNextStageKey] = useState(1);
+  const [pendingCycle, setPendingCycle] = useState<StudyCycle>();
   const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
   const cycles = useQuery({
     queryKey: ["study-cycles"],
@@ -195,6 +245,27 @@ function ProtectedStudyCyclesPage() {
         current.map((cycle) => cycle.id === updated.id ? updated : cycle)
       );
       editCycle(updated);
+    }
+  });
+  const activationMutation = useMutation({
+    mutationFn: ({ cycle, currentRunAction }: { cycle: StudyCycle; currentRunAction?: CycleSwitchAction }) =>
+      activateStudyCycle(cycle.id, currentRunAction),
+    onSuccess: (activated, variables) => {
+      queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
+        current.map((cycle) => {
+          if (cycle.id === activated.id) return activated;
+          if (cycle.status !== "ACTIVE") return cycle;
+          return {
+            ...cycle,
+            status: "INACTIVE",
+            currentRun: variables.currentRunAction === "PAUSE" && cycle.currentRun
+              ? { ...cycle.currentRun, status: "PAUSED" }
+              : null
+          };
+        })
+      );
+      setPendingCycle(undefined);
+      setSelectedCycleId(undefined);
     }
   });
 
@@ -262,6 +333,19 @@ function ProtectedStudyCyclesPage() {
       percentage: totalDraftMinutes > 0 ? Math.round((total.totalMinutes / totalDraftMinutes) * 100) : 0
     }));
   const stagesAreValid = draftStages.every((stage) => stage.targetMinutes > 0 && stage.targetMinutes % 5 === 0);
+  const activeCycle = cycles.data?.find((cycle) => cycle.status === "ACTIVE");
+  const otherCycles = cycles.data?.filter((cycle) => cycle.status !== "ACTIVE") ?? [];
+  const selectedCycle = cycles.data?.find((cycle) => cycle.id === selectedCycleId);
+  const activeCycleWouldBeEmpty = selectedCycle?.status === "ACTIVE" && draftStages.length === 0;
+
+  function requestCycleActivation(cycle: StudyCycle) {
+    if (activeCycle && activeCycle.id !== cycle.id) {
+      activationMutation.reset();
+      setPendingCycle(cycle);
+      return;
+    }
+    activationMutation.mutate({ cycle });
+  }
 
   if (auth.isPending) {
     return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
@@ -286,7 +370,7 @@ function ProtectedStudyCyclesPage() {
             <div>
               <span className="card-kicker">Novo rascunho</span>
               <h2 id="new-cycle-title">Nomeie seu ciclo</h2>
-              <p>Você poderá montar e reorganizar as etapas logo depois.</p>
+              <p>Você poderá montar e reorganizar as atividades logo depois.</p>
             </div>
             <form className="subject-form" onSubmit={submitCycle}>
               <label>Nome do ciclo<input autoFocus required maxLength={120} value={cycleName} onChange={(event) => setCycleName(event.target.value)} /></label>
@@ -318,18 +402,71 @@ function ProtectedStudyCyclesPage() {
             <p>Crie um rascunho e organize as matérias na ordem que funciona para você.</p>
           </section>
         )}
-        {cycles.data && cycles.data.length > 0 && (
-          <section className="cycle-draft-list" aria-label="Rascunhos de ciclos">
-            {cycles.data.map((cycle) => (
+        {activeCycle && activeCycle.currentRun && (
+          <section className="cycle-active-card" aria-label="Ciclo ativo">
+            <header className="cycle-active-head">
+              <div className="cycle-active-mark" aria-hidden="true"><CyclesIcon /></div>
+              <div className="cycle-active-copy">
+                <span className="cycle-active-status"><span aria-hidden="true" />Recebendo seus estudos</span>
+                <h2>{activeCycle.name}</h2>
+                <p>Volta {activeCycle.currentRun.number}</p>
+              </div>
+              <div className="cycle-active-total">
+                <span>Duração da volta</span>
+                <strong>{formatCycleMinutes(activeCycle.totalMinutes)}</strong>
+              </div>
+              <button className="secondary-button cycle-active-edit" type="button" aria-label={`Editar ${activeCycle.name}`} onClick={() => editCycle(activeCycle)}>Editar ciclo</button>
+            </header>
+            <div className="cycle-flow-intro">
+              <div><span className="card-kicker">Mapa da volta</span><strong>Escolha livremente o que estudar</strong></div>
+              <p>A ordem é uma sugestão. Você pode lançar estudo em qualquer atividade do ciclo.</p>
+            </div>
+            <ol className="cycle-flow-map" aria-label="Fluxo completo da volta">
+              {activeCycle.stages.map((stage, index) => (
+                <li className="cycle-flow-item" key={stage.id}>
+                  <span className="cycle-flow-index" aria-hidden="true">{String(stage.position).padStart(2, "0")}</span>
+                  <div><strong>{stage.subjectName}</strong><span>Atividade {stage.position}</span></div>
+                  {index === 0 && <span className="cycle-suggestion">Sugestão</span>}
+                  <strong className="cycle-flow-duration">{formatCycleMinutes(stage.targetMinutes)}</strong>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+        {cycles.data && cycles.data.length > 0 && !activeCycle && (
+          <section className="cycle-no-active" aria-label="Nenhum ciclo ativo">
+            <span className="cycle-card-mark" aria-hidden="true"><CyclesIcon /></span>
+            <div><strong>Nenhum ciclo está recebendo seus estudos</strong><p>Ative um planejamento abaixo para definir o foco atual.</p></div>
+          </section>
+        )}
+        {activationMutation.isError && !pendingCycle && (
+          <p className="form-error cycle-activation-error" role="alert">
+            {activationMutation.error instanceof ApiError ? activationMutation.error.message : "Não foi possível ativar o ciclo."}
+          </p>
+        )}
+        {otherCycles.length > 0 && (
+          <section className="cycle-draft-list" aria-label="Seus outros ciclos">
+            {otherCycles.map((cycle) => (
               <article className="cycle-draft-card" key={cycle.id}>
                 <span className="cycle-card-mark" aria-hidden="true"><CyclesIcon /></span>
                 <div>
-                  <span className="card-kicker">Rascunho</span>
+                  <span className="card-kicker">{cycle.currentRun ? "Pausado" : cycle.status === "DRAFT" ? "Rascunho" : "Sem volta aberta"}</span>
                   <h2>{cycle.name}</h2>
-                  <p>{cycle.stages.length} {cycle.stages.length === 1 ? "etapa" : "etapas"}</p>
+                  <p>{cycle.currentRun ? `Volta ${cycle.currentRun.number} pausada · ${cycle.stages.length} ${cycle.stages.length === 1 ? "atividade" : "atividades"}` : `${cycle.stages.length} ${cycle.stages.length === 1 ? "atividade" : "atividades"}`}</p>
                 </div>
                 <strong className="cycle-total">{formatCycleMinutes(cycle.totalMinutes)}</strong>
-                <button className="secondary-button cycle-edit-button" type="button" aria-label={`Editar ${cycle.name}`} onClick={() => editCycle(cycle)}>Editar</button>
+                <div className="cycle-card-actions">
+                  <button className="secondary-button" type="button" aria-label={`Editar ${cycle.name}`} onClick={() => editCycle(cycle)}>Editar</button>
+                  <button
+                    className="primary-button cycle-activate-button"
+                    type="button"
+                    aria-label={`${cycle.currentRun ? "Retomar" : "Ativar"} ${cycle.name}`}
+                    onClick={() => requestCycleActivation(cycle)}
+                    disabled={!cycle.activatable || activationMutation.isPending}
+                  >
+                    {activationMutation.isPending && activationMutation.variables?.cycle.id === cycle.id ? "Trocando…" : cycle.currentRun ? "Retomar" : "Ativar"}
+                  </button>
+                </div>
               </article>
             ))}
           </section>
@@ -338,7 +475,7 @@ function ProtectedStudyCyclesPage() {
           <section className="cycle-workbench" aria-labelledby="cycle-editor-title">
             <header className="cycle-workbench-header">
               <div>
-                <span className="card-kicker">Editor do rascunho</span>
+                <span className="card-kicker">Editor do ciclo</span>
                 <h2 id="cycle-editor-title">Monte a sequência</h2>
                 <p>Repita matérias quando quiser e ajuste a ordem ao seu ritmo.</p>
               </div>
@@ -352,7 +489,7 @@ function ProtectedStudyCyclesPage() {
               {subjects.isPending && <p className="cycle-subject-state" aria-live="polite">Abrindo suas matérias…</p>}
               {subjects.isError && <p className="form-error" role="alert">Não foi possível carregar as matérias ativas.</p>}
               {subjects.data?.length === 0 && (
-                <p className="cycle-subject-state">Crie ou restaure uma matéria ativa antes de adicionar etapas.</p>
+                <p className="cycle-subject-state">Crie ou restaure uma matéria ativa antes de adicionar atividades.</p>
               )}
               <div className="cycle-stage-list">
                 {draftStages.map((stage, index) => {
@@ -361,12 +498,12 @@ function ProtectedStudyCyclesPage() {
                     <article className="cycle-stage-card" key={stage.key}>
                       <div className="cycle-stage-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</div>
                       <div className="cycle-stage-fields">
-                        <label>Matéria da etapa {index + 1}
+                        <label>Matéria da atividade {index + 1}
                           <select value={stage.subjectId} onChange={(event) => updateStage(index, { subjectId: event.target.value })}>
                             {subjects.data?.map((subject) => <option value={subject.id} key={subject.id}>{subject.name}</option>)}
                           </select>
                         </label>
-                        <label>Duração da etapa {index + 1} em minutos
+                        <label>Duração da atividade {index + 1} em minutos
                           <input type="number" required min={5} step={5} value={stage.targetMinutes} onChange={(event) => updateStage(index, { targetMinutes: Number(event.target.value) })} />
                         </label>
                         {stage.targetMinutes > 180 && <p className="cycle-long-warning" role="alert">Bloco longo: considere dividir esta matéria em mais aparições.</p>}
@@ -380,13 +517,19 @@ function ProtectedStudyCyclesPage() {
                   );
                 })}
               </div>
-              {draftStages.length === 0 && <p className="cycle-empty-hint">Adicione pelo menos uma etapa para que este ciclo possa ser ativado depois.</p>}
-              <button className="cycle-add-stage" type="button" aria-label="Adicionar etapa" onClick={addStage} disabled={!subjects.data?.length}>+ Adicionar etapa</button>
+              {draftStages.length === 0 && (
+                <p className="cycle-empty-hint">
+                  {activeCycleWouldBeEmpty
+                    ? "O ciclo ativo precisa manter pelo menos uma atividade."
+                    : "Adicione pelo menos uma atividade para que este ciclo possa ser ativado depois."}
+                </p>
+              )}
+              <button className="cycle-add-stage" type="button" aria-label="Adicionar atividade" onClick={addStage} disabled={!subjects.data?.length}>+ Adicionar atividade</button>
               {updateMutation.isError && <p className="form-error" role="alert">{updateMutation.error instanceof ApiError ? updateMutation.error.message : "Não foi possível salvar o ciclo."}</p>}
               {updateMutation.isSuccess && <p className="form-success" role="status">Ciclo salvo.</p>}
               <div className="cycle-editor-actions">
                 <button className="secondary-button" type="button" onClick={() => setSelectedCycleId(undefined)}>Fechar editor</button>
-                <button className="primary-button" type="submit" disabled={updateMutation.isPending || !draftName.trim() || !stagesAreValid}>{updateMutation.isPending ? "Salvando…" : "Salvar ciclo"}</button>
+                <button className="primary-button" type="submit" disabled={updateMutation.isPending || !draftName.trim() || !stagesAreValid || activeCycleWouldBeEmpty}>{updateMutation.isPending ? "Salvando…" : "Salvar ciclo"}</button>
               </div>
             </form>
             <section className="cycle-subject-totals" aria-labelledby="cycle-subject-totals-title">
@@ -416,10 +559,22 @@ function ProtectedStudyCyclesPage() {
                   ))}
                 </ul>
               ) : (
-                <p className="cycle-subject-totals-empty">Adicione etapas para ver a distribuição do ciclo por matéria.</p>
+                <p className="cycle-subject-totals-empty">Adicione atividades para ver a distribuição do ciclo por matéria.</p>
               )}
             </section>
           </section>
+        )}
+        {pendingCycle && activeCycle && (
+          <CycleSwitchDialog
+            currentCycle={activeCycle}
+            targetCycle={pendingCycle}
+            pending={activationMutation.isPending}
+            error={activationMutation.isError
+              ? activationMutation.error instanceof ApiError ? activationMutation.error.message : "Não foi possível trocar de ciclo."
+              : undefined}
+            onCancel={() => { activationMutation.reset(); setPendingCycle(undefined); }}
+            onChoose={(currentRunAction) => activationMutation.mutate({ cycle: pendingCycle, currentRunAction })}
+          />
         )}
       </main>
     </AppShell>
