@@ -20,9 +20,11 @@ public record StudySession(
         Integer stagePosition,
         Integer targetMinutes,
         OffsetDateTime startedAt,
+        String notes,
         long measuredSeconds,
         Long effectiveSeconds,
         OffsetDateTime finishedAt,
         int version,
+        ExerciseResult exerciseResult,
         OffsetDateTime serverNow) {
 }

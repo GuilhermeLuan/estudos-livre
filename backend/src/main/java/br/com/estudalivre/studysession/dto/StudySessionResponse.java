@@ -2,6 +2,7 @@ package br.com.estudalivre.studysession.dto;
 
 import br.com.estudalivre.studysession.model.StudySession;
 import br.com.estudalivre.studysession.model.StudySessionCredit;
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -14,10 +15,12 @@ public record StudySessionResponse(
         ContentReference content,
         CycleReference cycle,
         OffsetDateTime startedAt,
+        String notes,
         long measuredSeconds,
         Long effectiveSeconds,
         OffsetDateTime finishedAt,
         int version,
+        ExerciseResultReference exerciseResult,
         List<CreditReference> credits,
         OffsetDateTime serverNow) {
 
@@ -46,6 +49,12 @@ public record StudySessionResponse(
             long creditedSeconds) {
     }
 
+    public record ExerciseResultReference(
+            int questionsAttempted,
+            int questionsCorrect,
+            BigDecimal accuracyPercentage) {
+    }
+
     public static StudySessionResponse from(StudySession session, List<StudySessionCredit> credits) {
         return new StudySessionResponse(
                 session.id(),
@@ -66,10 +75,17 @@ public record StudySessionResponse(
                                 session.stagePosition(),
                                 session.targetMinutes()),
                 session.startedAt(),
+                session.notes(),
                 session.measuredSeconds(),
                 session.effectiveSeconds(),
                 session.finishedAt(),
                 session.version(),
+                session.exerciseResult() == null
+                        ? null
+                        : new ExerciseResultReference(
+                                session.exerciseResult().questionsAttempted(),
+                                session.exerciseResult().questionsCorrect(),
+                                session.exerciseResult().accuracyPercentage()),
                 credits.stream()
                         .map(credit -> new CreditReference(
                                 credit.runStageId(),

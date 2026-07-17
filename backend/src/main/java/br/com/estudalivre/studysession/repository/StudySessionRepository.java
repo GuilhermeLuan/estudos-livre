@@ -2,6 +2,7 @@ package br.com.estudalivre.studysession.repository;
 
 import br.com.estudalivre.studysession.model.StudySession;
 import br.com.estudalivre.studysession.model.StudySessionCredit;
+import br.com.estudalivre.studysession.model.ExerciseResult;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -30,10 +31,15 @@ public class StudySessionRepository {
                    study_cycle_stage.position AS stage_position,
                    study_cycle_stage.target_minutes,
                    study_session.started_at,
+                   study_session.notes,
                    study_session.effective_seconds,
                    study_session.finished_at,
                    study_session.version,
-                   (
+                   exercise_result.questions_attempted,
+                   exercise_result.questions_correct,
+                   CASE WHEN study_session.origin = 'MANUAL'
+                     THEN study_session.effective_seconds
+                     ELSE (
                        SELECT COALESCE(
                            FLOOR(SUM(EXTRACT(EPOCH FROM (
                                COALESCE(segment.ended_at, CURRENT_TIMESTAMP) - segment.started_at
@@ -42,7 +48,8 @@ public class StudySessionRepository {
                        )::BIGINT
                        FROM study_session_timer_segment segment
                        WHERE segment.session_id = study_session.id
-                   ) AS measured_seconds,
+                     )
+                   END AS measured_seconds,
                    CURRENT_TIMESTAMP AS server_now
             FROM study_session
             JOIN subject ON subject.id = study_session.subject_id
@@ -50,6 +57,8 @@ public class StudySessionRepository {
             LEFT JOIN study_cycle ON study_cycle.id = study_session.cycle_id
             LEFT JOIN study_cycle_run ON study_cycle_run.id = study_session.cycle_run_id
             LEFT JOIN study_cycle_stage ON study_cycle_stage.id = study_session.cycle_stage_id
+            LEFT JOIN study_session_exercise_result exercise_result
+              ON exercise_result.session_id = study_session.id
             """;
 
     private final JdbcClient jdbcClient;
@@ -97,6 +106,35 @@ public class StudySessionRepository {
                 .update();
     }
 
+    public void createManual(
+            UUID id,
+            UUID ownerId,
+            UUID subjectId,
+            UUID contentId,
+            OffsetDateTime startedAt,
+            OffsetDateTime finishedAt,
+            long effectiveSeconds,
+            String notes) {
+        jdbcClient.sql("""
+                        INSERT INTO study_session (
+                            id, owner_id, origin, status, subject_id, content_id,
+                            started_at, finished_at, effective_seconds, notes
+                        ) VALUES (
+                            :id, :ownerId, 'MANUAL', 'FINISHED', :subjectId, :contentId,
+                            :startedAt, :finishedAt, :effectiveSeconds, :notes
+                        )
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .param("subjectId", subjectId)
+                .param("contentId", contentId)
+                .param("startedAt", startedAt)
+                .param("finishedAt", finishedAt)
+                .param("effectiveSeconds", effectiveSeconds)
+                .param("notes", notes)
+                .update();
+    }
+
     public Optional<StudySession> findCurrentByOwnerId(UUID ownerId) {
         return jdbcClient.sql(SESSION_PROJECTION + """
                         WHERE study_session.owner_id = :ownerId
@@ -116,6 +154,17 @@ public class StudySessionRepository {
                 .param("ownerId", ownerId)
                 .query(StudySessionRepository::mapSession)
                 .optional();
+    }
+
+    public java.util.List<StudySession> findHistoryByOwnerId(UUID ownerId) {
+        return jdbcClient.sql(SESSION_PROJECTION + """
+                        WHERE study_session.owner_id = :ownerId
+                          AND study_session.status = 'FINISHED'
+                        ORDER BY study_session.started_at DESC, study_session.id DESC
+                        """)
+                .param("ownerId", ownerId)
+                .query(StudySessionRepository::mapSession)
+                .list();
     }
 
     public Optional<String> findStatusForUpdate(UUID id, UUID ownerId) {
@@ -200,6 +249,33 @@ public class StudySessionRepository {
                 .update();
     }
 
+    public void saveExerciseResult(UUID sessionId, ExerciseResult result) {
+        jdbcClient.sql("""
+                        INSERT INTO study_session_exercise_result (
+                            session_id, questions_attempted, questions_correct
+                        ) VALUES (
+                            :sessionId, :questionsAttempted, :questionsCorrect
+                        )
+                        ON CONFLICT (session_id) DO UPDATE SET
+                            questions_attempted = EXCLUDED.questions_attempted,
+                            questions_correct = EXCLUDED.questions_correct,
+                            updated_at = CURRENT_TIMESTAMP
+                        """)
+                .param("sessionId", sessionId)
+                .param("questionsAttempted", result.questionsAttempted())
+                .param("questionsCorrect", result.questionsCorrect())
+                .update();
+    }
+
+    public void deleteExerciseResult(UUID sessionId) {
+        jdbcClient.sql("""
+                        DELETE FROM study_session_exercise_result
+                        WHERE session_id = :sessionId
+                        """)
+                .param("sessionId", sessionId)
+                .update();
+    }
+
     public void createCredit(UUID sessionId, UUID runStageId, long creditedSeconds) {
         jdbcClient.sql("""
                         INSERT INTO study_session_credit (session_id, run_stage_id, credited_seconds)
@@ -232,6 +308,52 @@ public class StudySessionRepository {
                 .list();
     }
 
+    public java.util.List<SubjectExerciseAggregate> findSubjectExerciseSummary(UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT session.subject_id, subject.name AS subject_name,
+                               SUM(result.questions_attempted) AS questions_attempted,
+                               SUM(result.questions_correct) AS questions_correct
+                        FROM study_session_exercise_result result
+                        JOIN study_session session ON session.id = result.session_id
+                        JOIN subject ON subject.id = session.subject_id
+                        WHERE session.owner_id = :ownerId
+                        GROUP BY session.subject_id, subject.name
+                        ORDER BY subject.name, session.subject_id
+                        """)
+                .param("ownerId", ownerId)
+                .query((resultSet, rowNumber) -> new SubjectExerciseAggregate(
+                        resultSet.getObject("subject_id", UUID.class),
+                        resultSet.getString("subject_name"),
+                        resultSet.getLong("questions_attempted"),
+                        resultSet.getLong("questions_correct")))
+                .list();
+    }
+
+    public java.util.List<ContentExerciseAggregate> findContentExerciseSummary(UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT session.content_id, content.name AS content_name,
+                               session.subject_id, subject.name AS subject_name,
+                               SUM(result.questions_attempted) AS questions_attempted,
+                               SUM(result.questions_correct) AS questions_correct
+                        FROM study_session_exercise_result result
+                        JOIN study_session session ON session.id = result.session_id
+                        JOIN subject ON subject.id = session.subject_id
+                        JOIN content ON content.id = session.content_id
+                        WHERE session.owner_id = :ownerId
+                        GROUP BY session.content_id, content.name, session.subject_id, subject.name
+                        ORDER BY subject.name, content.name, session.content_id
+                        """)
+                .param("ownerId", ownerId)
+                .query((resultSet, rowNumber) -> new ContentExerciseAggregate(
+                        resultSet.getObject("content_id", UUID.class),
+                        resultSet.getString("content_name"),
+                        resultSet.getObject("subject_id", UUID.class),
+                        resultSet.getString("subject_name"),
+                        resultSet.getLong("questions_attempted"),
+                        resultSet.getLong("questions_correct")))
+                .list();
+    }
+
     private static StudySession mapSession(ResultSet resultSet, int rowNumber) throws SQLException {
         return new StudySession(
                 resultSet.getObject("id", UUID.class),
@@ -250,10 +372,16 @@ public class StudySessionRepository {
                 resultSet.getObject("stage_position", Integer.class),
                 resultSet.getObject("target_minutes", Integer.class),
                 resultSet.getObject("started_at", OffsetDateTime.class),
+                resultSet.getString("notes"),
                 resultSet.getLong("measured_seconds"),
                 resultSet.getObject("effective_seconds", Long.class),
                 resultSet.getObject("finished_at", OffsetDateTime.class),
                 resultSet.getInt("version"),
+                resultSet.getObject("questions_attempted", Integer.class) == null
+                        ? null
+                        : new ExerciseResult(
+                                resultSet.getInt("questions_attempted"),
+                                resultSet.getInt("questions_correct")),
                 resultSet.getObject("server_now", OffsetDateTime.class));
     }
 
@@ -264,5 +392,21 @@ public class StudySessionRepository {
             UUID cycleRunId,
             Long effectiveSeconds,
             int version) {
+    }
+
+    public record SubjectExerciseAggregate(
+            UUID subjectId,
+            String subjectName,
+            long questionsAttempted,
+            long questionsCorrect) {
+    }
+
+    public record ContentExerciseAggregate(
+            UUID contentId,
+            String contentName,
+            UUID subjectId,
+            String subjectName,
+            long questionsAttempted,
+            long questionsCorrect) {
     }
 }

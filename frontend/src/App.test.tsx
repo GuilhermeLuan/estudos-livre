@@ -728,6 +728,151 @@ describe("authentication journey", () => {
     expect(await screen.findByRole("region", { name: "Cronômetro em andamento" })).toHaveTextContent("Sessão livre");
   });
 
+  it("registers a completed study and shows it immediately in recent history", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-manual; Path=/";
+    const manualSession = {
+      id: "session-manual",
+      origin: "MANUAL",
+      status: "FINISHED",
+      subject: { id: "subject-law", name: "Direito Constitucional" },
+      content: { id: "content-rights", name: "Direitos fundamentais" },
+      cycle: null,
+      startedAt: "2026-07-17T11:30:00Z",
+      notes: "Leitura dos artigos 5º a 17",
+      measuredSeconds: 2700,
+      effectiveSeconds: 2700,
+      finishedAt: "2026-07-17T12:15:00Z",
+      version: 0,
+      credits: [],
+      serverNow: "2026-07-17T12:20:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/study-sessions/history") return jsonResponse([]);
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-law", name: "Direito Constitucional", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([
+        { id: "content-rights", subjectId: "subject-law", name: "Direitos fundamentais", archived: false }
+      ]);
+      if (url === "/api/study-sessions/manual" && init?.method === "POST") return jsonResponse(manualSession, 201);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Registrar estudo" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Registrar estudo concluído" });
+    const subject = await within(dialog).findByLabelText("Matéria");
+    expect(subject).toHaveValue("subject-law");
+    await within(dialog).findByRole("option", { name: "Direitos fundamentais" });
+    fireEvent.change(within(dialog).getByLabelText("Conteúdo (opcional)"), {
+      target: { value: "content-rights" }
+    });
+    fireEvent.change(within(dialog).getByLabelText("Data e hora"), {
+      target: { value: "2026-07-17T08:30" }
+    });
+    fireEvent.change(within(dialog).getByLabelText("Duração efetiva"), {
+      target: { value: "00:45:00" }
+    });
+    fireEvent.change(within(dialog).getByLabelText("Anotações (opcional)"), {
+      target: { value: "Leitura dos artigos 5º a 17" }
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Salvar registro" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/manual",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          startedAtLocal: "2026-07-17T08:30:00",
+          effectiveSeconds: 2700,
+          subjectId: "subject-law",
+          contentId: "content-rights",
+          notes: "Leitura dos artigos 5º a 17"
+        })
+      })
+    ));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Registrar estudo concluído" })).not.toBeInTheDocument());
+    const history = screen.getByRole("region", { name: "Histórico recente" });
+    expect(within(history).getByText("Direito Constitucional")).toBeVisible();
+    expect(within(history).getByText("Direitos fundamentais")).toBeVisible();
+    expect(within(history).getByText("45min")).toBeVisible();
+  });
+
+  it("shows exercise summaries and edits a session result without changing its duration", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-edicao-exercicios; Path=/";
+    const session = {
+      id: "session-exercises",
+      origin: "FREE",
+      status: "FINISHED",
+      subject: { id: "subject-law", name: "Direito Constitucional" },
+      content: { id: "content-rights", name: "Direitos fundamentais" },
+      cycle: null,
+      startedAt: "2026-07-17T11:30:00Z",
+      notes: null,
+      measuredSeconds: 1200,
+      effectiveSeconds: 1200,
+      finishedAt: "2026-07-17T11:50:00Z",
+      version: 1,
+      exerciseResult: { questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 },
+      credits: [],
+      serverNow: "2026-07-17T12:20:00Z"
+    };
+    const updatedSession = {
+      ...session,
+      exerciseResult: { questionsAttempted: 20, questionsCorrect: 15, accuracyPercentage: 75.0 }
+    };
+    const summary = {
+      subjects: [{ subjectId: "subject-law", subjectName: "Direito Constitucional", questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }],
+      contents: [{ contentId: "content-rights", contentName: "Direitos fundamentais", subjectId: "subject-law", subjectName: "Direito Constitucional", questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }]
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/study-sessions/history") return jsonResponse([session]);
+      if (url === "/api/study-sessions/exercise-summary") return jsonResponse(summary);
+      if (url === "/api/study-sessions/session-exercises/exercise-result" && init?.method === "PUT") return jsonResponse(updatedSession);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Histórico" }));
+
+    const history = await screen.findByRole("region", { name: "Histórico recente" });
+    expect(await within(history).findByText("8 de 10 questões · 80,0%")).toBeVisible();
+    const exerciseSummary = await screen.findByRole("region", { name: "Resumo de exercícios" });
+    expect(within(exerciseSummary).getByText("Direito Constitucional")).toBeVisible();
+    expect(within(exerciseSummary).getAllByText("80,0% de acerto")).toHaveLength(2);
+
+    fireEvent.click(within(history).getByRole("button", { name: "Editar exercícios de Direito Constitucional" }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar exercícios" });
+    fireEvent.change(within(dialog).getByLabelText("Questões realizadas"), { target: { value: "20" } });
+    fireEvent.change(within(dialog).getByLabelText("Questões corretas"), { target: { value: "15" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Salvar exercícios" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/session-exercises/exercise-result",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ questionsAttempted: 20, questionsCorrect: 15 })
+      })
+    ));
+    expect(within(history).getByText("15 de 20 questões · 75,0%")).toBeVisible();
+    expect(within(history).getByText("20min")).toBeVisible();
+  });
+
   it("recovers a paused timer from the backend and resumes it", async () => {
     window.history.pushState({}, "", "/ciclos");
     document.cookie = "XSRF-TOKEN=token-retomada; Path=/";
@@ -768,7 +913,7 @@ describe("authentication journey", () => {
     expect(screen.getByRole("button", { name: "Pausar" })).toBeEnabled();
   });
 
-  it("confirms the measured duration and submits an adjusted effective duration", async () => {
+  it("confirms the effective duration and optionally submits an exercise result", async () => {
     window.history.pushState({}, "", "/ciclos");
     document.cookie = "XSRF-TOKEN=token-finalizacao; Path=/";
     const activeSession = {
@@ -815,13 +960,21 @@ describe("authentication journey", () => {
     const effectiveDuration = within(dialog).getByLabelText("Duração efetiva");
     expect(effectiveDuration).toHaveValue("01:02:03");
     fireEvent.change(effectiveDuration, { target: { value: "00:45:00" } });
+    fireEvent.change(within(dialog).getByLabelText("Questões realizadas"), { target: { value: "10" } });
+    fireEvent.change(within(dialog).getByLabelText("Questões corretas"), { target: { value: "8" } });
+    expect(within(dialog).getByText("8 de 10 · 80,0% de acerto")).toBeVisible();
     fireEvent.click(within(dialog).getByRole("button", { name: "Finalizar sessão" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/study-sessions/session-finish/finish",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ effectiveSeconds: 2700, expectedVersion: 0 })
+        body: JSON.stringify({
+          effectiveSeconds: 2700,
+          expectedVersion: 0,
+          questionsAttempted: 10,
+          questionsCorrect: 8
+        })
       })
     ));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Finalizar sessão" })).not.toBeInTheDocument());

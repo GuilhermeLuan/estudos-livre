@@ -210,6 +210,174 @@ class StudySessionTimerIntegrationTest {
     }
 
     @Test
+    void savesAnExerciseResultWhenFinishingAndReturnsItInHistory() throws Exception {
+        IdentityPrincipal principal = createUser("exercicios@example.com");
+        UUID subjectId = createSubject(principal, "Direito Constitucional");
+        String created = startFreeSession(principal, subjectId);
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":900,
+                                  "expectedVersion":0,
+                                  "questionsAttempted":9,
+                                  "questionsCorrect":7
+                                }
+                                """)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.exerciseResult.questionsAttempted").value(9))
+                .andExpect(jsonPath("$.exerciseResult.questionsCorrect").value(7))
+                .andExpect(jsonPath("$.exerciseResult.accuracyPercentage").value(77.8));
+
+        mockMvc.perform(get("/api/study-sessions/history").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(sessionId.toString()))
+                .andExpect(jsonPath("$[0].exerciseResult.questionsAttempted").value(9))
+                .andExpect(jsonPath("$[0].exerciseResult.questionsCorrect").value(7))
+                .andExpect(jsonPath("$[0].exerciseResult.accuracyPercentage").value(77.8));
+    }
+
+    @Test
+    void rejectsInvalidExerciseCountsWithoutFinishingTheSession() throws Exception {
+        IdentityPrincipal principal = createUser("exercicios-invalidos@example.com");
+        UUID subjectId = createSubject(principal, "Direito Administrativo");
+        String created = startFreeSession(principal, subjectId);
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":900,
+                                  "expectedVersion":0,
+                                  "questionsAttempted":10,
+                                  "questionsCorrect":11
+                                }
+                                """)))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(get("/api/study-sessions/current").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(sessionId.toString()))
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM study_session_exercise_result",
+                Integer.class)).isZero();
+    }
+
+    @Test
+    void editsOnlyTheExerciseResultOfAFinishedOwnedSession() throws Exception {
+        IdentityPrincipal principal = createUser("edicao-exercicios@example.com");
+        UUID subjectId = createSubject(principal, "Processo Civil");
+        String created = startFreeSession(principal, subjectId);
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+        String finished = mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":1200,
+                                  "expectedVersion":0,
+                                  "questionsAttempted":10,
+                                  "questionsCorrect":8
+                                }
+                                """)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-sessions/{id}/exercise-result", sessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"questionsAttempted":20,"questionsCorrect":15}
+                                """)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.startedAt").value(JsonPath.read(finished, "$.startedAt").toString()))
+                .andExpect(jsonPath("$.finishedAt").value(JsonPath.read(finished, "$.finishedAt").toString()))
+                .andExpect(jsonPath("$.effectiveSeconds").value(1200))
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.exerciseResult.questionsAttempted").value(20))
+                .andExpect(jsonPath("$.exerciseResult.questionsCorrect").value(15))
+                .andExpect(jsonPath("$.exerciseResult.accuracyPercentage").value(75.0));
+    }
+
+    @Test
+    void protectsExerciseResultOwnershipAndRemovesItWithZeroAttempts() throws Exception {
+        IdentityPrincipal owner = createUser("dona-exercicios@example.com");
+        IdentityPrincipal otherUser = createUser("outra-exercicios@example.com");
+        UUID subjectId = createSubject(owner, "Direito Penal");
+        String created = startFreeSession(owner, subjectId);
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":600,
+                                  "expectedVersion":0,
+                                  "questionsAttempted":10,
+                                  "questionsCorrect":6
+                                }
+                                """)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-sessions/{id}/exercise-result", sessionId)
+                        .with(user(otherUser))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"questionsAttempted":20,"questionsCorrect":15}
+                                """)))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-sessions/{id}/exercise-result", sessionId)
+                        .with(user(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"questionsAttempted":0,"questionsCorrect":0}
+                                """)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.exerciseResult").isEmpty());
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM study_session_exercise_result",
+                Integer.class)).isZero();
+    }
+
+    @Test
+    void aggregatesExerciseResultsBySubjectAndContentForTheOwnerOnly() throws Exception {
+        IdentityPrincipal owner = createUser("resumo-exercicios@example.com");
+        UUID subjectId = createSubject(owner, "Direito Constitucional");
+        UUID contentId = createContent(owner, subjectId, "Direitos fundamentais");
+        finishFreeSessionWithExercises(owner, subjectId, contentId, 10, 8);
+        finishFreeSessionWithExercises(owner, subjectId, contentId, 20, 10);
+        finishFreeSessionWithExercises(owner, subjectId, null, 5, 5);
+
+        IdentityPrincipal otherUser = createUser("resumo-alheio@example.com");
+        UUID otherSubjectId = createSubject(otherUser, "Direito Constitucional");
+        finishFreeSessionWithExercises(otherUser, otherSubjectId, null, 100, 100);
+
+        mockMvc.perform(get("/api/study-sessions/exercise-summary").with(user(owner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subjects.length()").value(1))
+                .andExpect(jsonPath("$.subjects[0].subjectId").value(subjectId.toString()))
+                .andExpect(jsonPath("$.subjects[0].subjectName").value("Direito Constitucional"))
+                .andExpect(jsonPath("$.subjects[0].questionsAttempted").value(35))
+                .andExpect(jsonPath("$.subjects[0].questionsCorrect").value(23))
+                .andExpect(jsonPath("$.subjects[0].accuracyPercentage").value(65.7))
+                .andExpect(jsonPath("$.contents.length()").value(1))
+                .andExpect(jsonPath("$.contents[0].contentId").value(contentId.toString()))
+                .andExpect(jsonPath("$.contents[0].contentName").value("Direitos fundamentais"))
+                .andExpect(jsonPath("$.contents[0].questionsAttempted").value(30))
+                .andExpect(jsonPath("$.contents[0].questionsCorrect").value(18))
+                .andExpect(jsonPath("$.contents[0].accuracyPercentage").value(60.0));
+    }
+
+    @Test
     void distributesEffectiveTimeAcrossFutureStagesOfTheSameSubjectOnly() throws Exception {
         IdentityPrincipal principal = createUser("distribuicao@example.com");
         UUID mathematicsId = createSubject(principal, "Matemática");
@@ -680,6 +848,39 @@ class StudySessionTimerIntegrationTest {
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
+    }
+
+    private void finishFreeSessionWithExercises(
+            IdentityPrincipal principal,
+            UUID subjectId,
+            UUID contentId,
+            int questionsAttempted,
+            int questionsCorrect) throws Exception {
+        String startBody = contentId == null
+                ? "{\"origin\":\"FREE\",\"subjectId\":\"%s\"}".formatted(subjectId)
+                : "{\"origin\":\"FREE\",\"subjectId\":\"%s\",\"contentId\":\"%s\"}"
+                        .formatted(subjectId, contentId);
+        String created = mockMvc.perform(withSpaCsrf(post("/api/study-sessions")
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(startBody)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":600,
+                                  "expectedVersion":0,
+                                  "questionsAttempted":%d,
+                                  "questionsCorrect":%d
+                                }
+                                """.formatted(questionsAttempted, questionsCorrect))))
+                .andExpect(status().isOk());
     }
 
     private record StageInput(UUID subjectId, int targetMinutes) {

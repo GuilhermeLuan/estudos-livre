@@ -36,13 +36,19 @@ import {
   updateStudyCycle
 } from "./study-cycle-api";
 import {
+  createManualStudySession,
   finishStudySession,
+  listStudySessionHistory,
+  loadExerciseSummary,
   loadCurrentStudySession,
   pauseStudySession,
   resumeStudySession,
   startStudySession,
   StudySession,
-  StartStudySessionInput
+  StartStudySessionInput,
+  ExerciseResultInput,
+  ExerciseSummary,
+  updateExerciseResult
 } from "./study-session-api";
 import "./styles.css";
 
@@ -396,6 +402,10 @@ function parseTimer(value: string) {
   return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
 }
 
+function formatAccuracy(value: number) {
+  return value.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
 function useLiveSessionSeconds(session: StudySession | null | undefined) {
   const [seconds, setSeconds] = useState(session?.measuredSeconds ?? 0);
 
@@ -464,10 +474,32 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
   error?: string;
   onDurationChange: (duration: string) => void;
   onCancel: () => void;
-  onSubmit: (effectiveSeconds: number) => void;
+  onSubmit: (effectiveSeconds: number, exerciseResult?: ExerciseResultInput) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [questionsAttemptedInput, setQuestionsAttemptedInput] = useState("");
+  const [questionsCorrectInput, setQuestionsCorrectInput] = useState("");
   const effectiveSeconds = parseTimer(effectiveDuration);
+  const questionsAttempted = questionsAttemptedInput === "" ? null : Number(questionsAttemptedInput);
+  const questionsCorrect = questionsCorrectInput === "" ? null : Number(questionsCorrectInput);
+  const hasExerciseInput = questionsAttemptedInput !== "" || questionsCorrectInput !== "";
+  const emptyExerciseResult = !hasExerciseInput
+    || (questionsAttempted === 0 && (questionsCorrect === null || questionsCorrect === 0));
+  const validExerciseResult = emptyExerciseResult || (
+    Number.isInteger(questionsAttempted)
+    && Number.isInteger(questionsCorrect)
+    && questionsAttempted !== null
+    && questionsCorrect !== null
+    && questionsAttempted > 0
+    && questionsCorrect >= 0
+    && questionsCorrect <= questionsAttempted
+  );
+  const exerciseResult = !emptyExerciseResult && validExerciseResult
+    ? { questionsAttempted: questionsAttempted!, questionsCorrect: questionsCorrect! }
+    : undefined;
+  const accuracyPercentage = exerciseResult
+    ? (exerciseResult.questionsCorrect / exerciseResult.questionsAttempted) * 100
+    : null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -481,7 +513,7 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
 
   return (
     <dialog className="study-session-dialog finish-session-dialog" ref={dialogRef} aria-labelledby="finish-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
-      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds !== null) onSubmit(effectiveSeconds); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds !== null && validExerciseResult) onSubmit(effectiveSeconds, exerciseResult); }}>
         <header>
           <span className="study-session-dialog-mark" aria-hidden="true">✓</span>
           <div>
@@ -511,6 +543,21 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
             />
             <small id="effective-duration-hint">Use horas:minutos:segundos, por exemplo 00:45:00.</small>
           </label>
+          <fieldset className="finish-session-exercises">
+            <legend>Exercícios <span>(opcional)</span></legend>
+            <p>Registre o desempenho deste bloco; você poderá corrigi-lo depois.</p>
+            <div>
+              <label htmlFor="questions-attempted">Questões realizadas
+                <input id="questions-attempted" type="number" min="0" step="1" inputMode="numeric" value={questionsAttemptedInput} onChange={(event) => setQuestionsAttemptedInput(event.target.value)} disabled={pending} />
+              </label>
+              <label htmlFor="questions-correct">Questões corretas
+                <input id="questions-correct" type="number" min="0" step="1" inputMode="numeric" value={questionsCorrectInput} onChange={(event) => setQuestionsCorrectInput(event.target.value)} disabled={pending} />
+              </label>
+            </div>
+            {accuracyPercentage !== null && (
+              <output>{exerciseResult!.questionsCorrect} de {exerciseResult!.questionsAttempted} · {accuracyPercentage.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% de acerto</output>
+            )}
+          </fieldset>
           <div className="finish-session-credit">
             <span className="finish-session-credit-mark" aria-hidden="true">{String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}</span>
             <div>
@@ -521,13 +568,270 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
           </div>
         </div>
         {effectiveSeconds === null && <p className="form-error" role="alert">Informe a duração no formato horas:minutos:segundos.</p>}
+        {!validExerciseResult && <p className="form-error" role="alert">Informe números inteiros e não deixe os acertos superarem as questões realizadas.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <footer>
           <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Continuar estudando</button>
-          <button className="primary-button" type="submit" disabled={pending || effectiveSeconds === null}>{pending ? "Finalizando…" : "Finalizar sessão"}</button>
+          <button className="primary-button" type="submit" disabled={pending || effectiveSeconds === null || !validExerciseResult}>{pending ? "Finalizando…" : "Finalizar sessão"}</button>
         </footer>
       </form>
     </dialog>
+  );
+}
+
+function ExerciseResultDialog({ session, pending, error, onCancel, onSubmit }: {
+  session: StudySession;
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onSubmit: (exerciseResult: ExerciseResultInput) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [questionsAttemptedInput, setQuestionsAttemptedInput] = useState(
+    String(session.exerciseResult?.questionsAttempted ?? "")
+  );
+  const [questionsCorrectInput, setQuestionsCorrectInput] = useState(
+    String(session.exerciseResult?.questionsCorrect ?? "")
+  );
+  const questionsAttempted = questionsAttemptedInput === "" ? null : Number(questionsAttemptedInput);
+  const questionsCorrect = questionsCorrectInput === "" ? null : Number(questionsCorrectInput);
+  const valid = Number.isInteger(questionsAttempted)
+    && Number.isInteger(questionsCorrect)
+    && questionsAttempted !== null
+    && questionsCorrect !== null
+    && questionsAttempted >= 0
+    && questionsCorrect >= 0
+    && questionsCorrect <= questionsAttempted
+    && (questionsAttempted > 0 || questionsCorrect === 0);
+  const accuracy = valid && questionsAttempted! > 0
+    ? questionsCorrect! / questionsAttempted! * 100
+    : null;
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog exercise-result-dialog" ref={dialogRef} aria-labelledby="exercise-result-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) onSubmit({ questionsAttempted: questionsAttempted!, questionsCorrect: questionsCorrect! });
+      }}>
+        <header>
+          <span className="study-session-dialog-mark" aria-hidden="true">%</span>
+          <div>
+            <span className="card-kicker">Correção da ficha</span>
+            <h2 id="exercise-result-title">Editar exercícios</h2>
+            <p>{session.subject.name} · {session.content?.name ?? "Sem conteúdo específico"}</p>
+          </div>
+        </header>
+        <div className="exercise-result-fields">
+          <label htmlFor="edit-questions-attempted">Questões realizadas
+            <input id="edit-questions-attempted" type="number" min="0" step="1" inputMode="numeric" autoFocus value={questionsAttemptedInput} onChange={(event) => setQuestionsAttemptedInput(event.target.value)} disabled={pending} />
+          </label>
+          <label htmlFor="edit-questions-correct">Questões corretas
+            <input id="edit-questions-correct" type="number" min="0" step="1" inputMode="numeric" value={questionsCorrectInput} onChange={(event) => setQuestionsCorrectInput(event.target.value)} disabled={pending} />
+          </label>
+          {accuracy !== null && <output>{questionsCorrect} de {questionsAttempted} · {formatAccuracy(accuracy)}% de acerto</output>}
+          {questionsAttempted === 0 && questionsCorrect === 0 && <p>Salvar com zero remove o resultado desta sessão.</p>}
+        </div>
+        {!valid && <p className="form-error" role="alert">Informe números inteiros e não deixe os acertos superarem as questões realizadas.</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Cancelar</button>
+          <button className="primary-button" type="submit" disabled={pending || !valid}>{pending ? "Salvando…" : "Salvar exercícios"}</button>
+        </footer>
+      </form>
+    </dialog>
+  );
+}
+
+function ManualStudySessionDialog({
+  subjects,
+  contents,
+  selectedSubjectId,
+  selectedContentId,
+  startedAtLocal,
+  effectiveDuration,
+  notes,
+  loadingSubjects,
+  loadingContents,
+  pending,
+  error,
+  onSubjectChange,
+  onContentChange,
+  onStartedAtChange,
+  onDurationChange,
+  onNotesChange,
+  onCancel,
+  onSubmit
+}: {
+  subjects: Subject[];
+  contents: StudyContent[];
+  selectedSubjectId: string;
+  selectedContentId: string;
+  startedAtLocal: string;
+  effectiveDuration: string;
+  notes: string;
+  loadingSubjects: boolean;
+  loadingContents: boolean;
+  pending: boolean;
+  error?: string;
+  onSubjectChange: (subjectId: string) => void;
+  onContentChange: (contentId: string) => void;
+  onStartedAtChange: (value: string) => void;
+  onDurationChange: (value: string) => void;
+  onNotesChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: (effectiveSeconds: number) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const effectiveSeconds = parseTimer(effectiveDuration);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog manual-session-dialog" ref={dialogRef} aria-labelledby="manual-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds && selectedSubjectId) onSubmit(effectiveSeconds); }}>
+        <header>
+          <span className="study-session-dialog-mark manual-session-mark" aria-hidden="true">＋</span>
+          <div>
+            <span className="card-kicker">Ficha de estudo</span>
+            <h2 id="manual-session-title">Registrar estudo concluído</h2>
+            <p>Inclua um bloco feito sem cronômetro. O horário será interpretado no seu fuso configurado.</p>
+          </div>
+        </header>
+        <div className="manual-session-fields">
+          <div className="manual-session-timing">
+            <label htmlFor="manual-started-at">Data e hora
+              <input id="manual-started-at" type="datetime-local" value={startedAtLocal} onChange={(event) => onStartedAtChange(event.target.value)} disabled={pending} required />
+            </label>
+            <label htmlFor="manual-duration">Duração efetiva
+              <input id="manual-duration" aria-label="Duração efetiva" inputMode="numeric" pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]" aria-describedby="manual-duration-hint" value={effectiveDuration} onChange={(event) => onDurationChange(event.target.value)} disabled={pending} placeholder="00:45:00" required />
+              <small id="manual-duration-hint">Use horas:minutos:segundos.</small>
+            </label>
+          </div>
+          <div className="manual-session-context">
+            <label htmlFor="manual-subject">Matéria
+              <select id="manual-subject" value={selectedSubjectId} onChange={(event) => onSubjectChange(event.target.value)} disabled={loadingSubjects || pending} required>
+                {loadingSubjects && <option value="">Carregando matérias…</option>}
+                {!loadingSubjects && subjects.length === 0 && <option value="">Nenhuma matéria ativa</option>}
+                {subjects.map((subject) => <option value={subject.id} key={subject.id}>{subject.name}</option>)}
+              </select>
+            </label>
+            <label htmlFor="manual-content">Conteúdo (opcional)
+              <select id="manual-content" value={selectedContentId} onChange={(event) => onContentChange(event.target.value)} disabled={!selectedSubjectId || loadingContents || pending}>
+                <option value="">Sem conteúdo específico</option>
+                {contents.map((content) => <option value={content.id} key={content.id}>{content.name}</option>)}
+              </select>
+            </label>
+          </div>
+          <label htmlFor="manual-notes">Anotações (opcional)
+            <textarea id="manual-notes" maxLength={4000} rows={4} value={notes} onChange={(event) => onNotesChange(event.target.value)} disabled={pending} placeholder="O que foi estudado, dúvidas ou próximos passos" />
+          </label>
+          <div className="manual-session-credit-note">
+            <span aria-hidden="true">✓</span>
+            <p><strong>Um registro, dois efeitos.</strong> O tempo entra no histórico e avança as etapas compatíveis da volta ativa.</p>
+          </div>
+        </div>
+        {effectiveDuration && !effectiveSeconds && <p className="form-error" role="alert">Informe uma duração maior que zero no formato horas:minutos:segundos.</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Cancelar</button>
+          <button className="primary-button" type="submit" disabled={pending || !selectedSubjectId || !startedAtLocal || !effectiveSeconds}>{pending ? "Salvando…" : "Salvar registro"}</button>
+        </footer>
+      </form>
+    </dialog>
+  );
+}
+
+function StudySessionHistory({ sessions, pending, error, onEditExercises }: {
+  sessions: StudySession[];
+  pending: boolean;
+  error: boolean;
+  onEditExercises: (session: StudySession) => void;
+}) {
+  return (
+    <section className="study-history" aria-label="Histórico recente">
+      <header>
+        <div><span className="card-kicker">Caderno de registros</span><h2>Histórico recente</h2></div>
+        <span>{sessions.length} {sessions.length === 1 ? "sessão" : "sessões"}</span>
+      </header>
+      {pending && <p className="study-history-state">Abrindo seus registros…</p>}
+      {error && <p className="form-error" role="alert">Não foi possível carregar o histórico.</p>}
+      {!pending && !error && sessions.length === 0 && <p className="study-history-state">Os estudos concluídos aparecerão aqui.</p>}
+      {sessions.length > 0 && (
+        <ol>
+          {sessions.map((session) => (
+            <li key={session.id}>
+              <span className="study-history-duration">{formatCycleMinutes(Math.round((session.effectiveSeconds ?? 0) / 60))}</span>
+              <div className="study-history-copy">
+                <strong>{session.subject.name}</strong>
+                <small>{session.content?.name ?? "Sem conteúdo específico"}</small>
+                {session.exerciseResult && <span className="study-history-exercises">{session.exerciseResult.questionsCorrect} de {session.exerciseResult.questionsAttempted} questões · {formatAccuracy(session.exerciseResult.accuracyPercentage)}%</span>}
+              </div>
+              <div className="study-history-meta">
+                <time dateTime={session.startedAt}>{new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(session.startedAt))}</time>
+                <button className="text-button" type="button" aria-label={`Editar exercícios de ${session.subject.name}`} onClick={() => onEditExercises(session)}>Editar exercícios</button>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+function ExerciseSummaryPanel({ summary, pending, error }: {
+  summary?: ExerciseSummary;
+  pending: boolean;
+  error: boolean;
+}) {
+  const empty = !summary || (summary.subjects.length === 0 && summary.contents.length === 0);
+  return (
+    <section className="exercise-summary" aria-label="Resumo de exercícios">
+      <header>
+        <div><span className="card-kicker">Desempenho acumulado</span><h2>Resumo de exercícios</h2></div>
+        <span>acertos sobre realizadas</span>
+      </header>
+      {pending && <p className="study-history-state">Somando seus resultados…</p>}
+      {error && <p className="form-error" role="alert">Não foi possível carregar o resumo de exercícios.</p>}
+      {!pending && !error && empty && <p className="study-history-state">Finalize uma sessão com questões para começar o resumo.</p>}
+      {!pending && !error && summary && !empty && (
+        <div className="exercise-summary-grid">
+          {summary.subjects.map((subject) => (
+            <article key={subject.subjectId}>
+              <span>Matéria</span>
+              <strong>{subject.subjectName}</strong>
+              <b>{subject.questionsCorrect} / {subject.questionsAttempted}</b>
+              <small>{formatAccuracy(subject.accuracyPercentage)}% de acerto</small>
+            </article>
+          ))}
+          {summary.contents.map((content) => (
+            <article className="is-content" key={content.contentId}>
+              <span>Conteúdo · {content.subjectName}</span>
+              <strong>{content.contentName}</strong>
+              <b>{content.questionsCorrect} / {content.questionsAttempted}</b>
+              <small>{formatAccuracy(content.accuracyPercentage)}% de acerto</small>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -639,6 +943,14 @@ function ProtectedStudyCyclesPage() {
   const [effectiveDuration, setEffectiveDuration] = useState("");
   const [finishMeasuredSeconds, setFinishMeasuredSeconds] = useState(0);
   const [showRunLedger, setShowRunLedger] = useState(false);
+  const [showManualSession, setShowManualSession] = useState(false);
+  const [showStudyHistory, setShowStudyHistory] = useState(false);
+  const [editingExerciseSession, setEditingExerciseSession] = useState<StudySession>();
+  const [manualSubjectId, setManualSubjectId] = useState("");
+  const [manualContentId, setManualContentId] = useState("");
+  const [manualStartedAt, setManualStartedAt] = useState("");
+  const [manualDuration, setManualDuration] = useState("");
+  const [manualNotes, setManualNotes] = useState("");
   const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
   const cycles = useQuery({
     queryKey: ["study-cycles"],
@@ -653,10 +965,22 @@ function ProtectedStudyCyclesPage() {
     enabled: showRunLedger && Boolean(activeCycleId),
     staleTime: 30_000
   });
+  const studyHistory = useQuery({
+    queryKey: ["study-session", "history"],
+    queryFn: listStudySessionHistory,
+    enabled: showStudyHistory || showManualSession,
+    staleTime: 30_000
+  });
+  const exerciseSummary = useQuery({
+    queryKey: ["study-session", "exercise-summary"],
+    queryFn: loadExerciseSummary,
+    enabled: showStudyHistory,
+    staleTime: 30_000
+  });
   const subjects = useQuery({
     queryKey: ["subjects", "active"],
     queryFn: () => listSubjects("active"),
-    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion || sessionComposer === "FREE"),
+    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion || sessionComposer === "FREE" || showManualSession),
     staleTime: 30_000
   });
   const currentSession = useQuery({
@@ -669,6 +993,12 @@ function ProtectedStudyCyclesPage() {
     queryKey: ["contents", sessionSubjectId, "active"],
     queryFn: () => listContents(sessionSubjectId, "active"),
     enabled: Boolean(sessionComposer && sessionSubjectId),
+    staleTime: 30_000
+  });
+  const manualContents = useQuery({
+    queryKey: ["contents", manualSubjectId, "active"],
+    queryFn: () => listContents(manualSubjectId, "active"),
+    enabled: showManualSession && Boolean(manualSubjectId),
     staleTime: 30_000
   });
   const liveSessionSeconds = useLiveSessionSeconds(currentSession.data);
@@ -689,6 +1019,11 @@ function ProtectedStudyCyclesPage() {
     if (sessionComposer !== "FREE" || sessionSubjectId || !subjects.data?.length) return;
     setSessionSubjectId(subjects.data[0].id);
   }, [sessionComposer, sessionSubjectId, subjects.data]);
+
+  useEffect(() => {
+    if (!showManualSession || manualSubjectId || !subjects.data?.length) return;
+    setManualSubjectId(subjects.data[0].id);
+  }, [showManualSession, manualSubjectId, subjects.data]);
 
   function editCycle(cycle: StudyCycle) {
     setSavedAsCustomized(false);
@@ -799,15 +1134,55 @@ function ProtectedStudyCyclesPage() {
     onSuccess: (updated) => queryClient.setQueryData(["study-session", "current"], updated)
   });
   const finishSessionMutation = useMutation({
-    mutationFn: ({ session, effectiveSeconds }: { session: StudySession; effectiveSeconds: number }) =>
-      finishStudySession(session.id, effectiveSeconds, session.version),
-    onSuccess: () => {
+    mutationFn: ({ session, effectiveSeconds, exerciseResult }: { session: StudySession; effectiveSeconds: number; exerciseResult?: ExerciseResultInput }) =>
+      finishStudySession(session.id, effectiveSeconds, session.version, exerciseResult),
+    onSuccess: (finished) => {
       queryClient.setQueryData(["study-session", "current"], null);
+      queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) => [
+        finished,
+        ...current.filter((session) => session.id !== finished.id)
+      ]);
       void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
       void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
       setFinishingSession(undefined);
       setEffectiveDuration("");
       setFinishMeasuredSeconds(0);
+    }
+  });
+  const exerciseResultMutation = useMutation({
+    mutationFn: ({ session, input }: { session: StudySession; input: ExerciseResultInput }) =>
+      updateExerciseResult(session.id, input),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) =>
+        current.map((session) => session.id === updated.id ? updated : session)
+      );
+      void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
+      setEditingExerciseSession(undefined);
+    }
+  });
+  const manualSessionMutation = useMutation({
+    mutationFn: (effectiveSeconds: number) => createManualStudySession({
+      startedAtLocal: manualStartedAt.length === 16 ? `${manualStartedAt}:00` : manualStartedAt,
+      effectiveSeconds,
+      subjectId: manualSubjectId,
+      ...(manualContentId ? { contentId: manualContentId } : {}),
+      ...(manualNotes.trim() ? { notes: manualNotes.trim() } : {})
+    }),
+    onSuccess: (created) => {
+      queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) => [
+        created,
+        ...current.filter((session) => session.id !== created.id)
+      ]);
+      void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
+      void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
+      setShowStudyHistory(true);
+      setShowManualSession(false);
+      setManualSubjectId("");
+      setManualContentId("");
+      setManualStartedAt("");
+      setManualDuration("");
+      setManualNotes("");
     }
   });
 
@@ -1004,6 +1379,22 @@ function ProtectedStudyCyclesPage() {
     finishSessionMutation.reset();
   }
 
+  function openManualSession() {
+    manualSessionMutation.reset();
+    setShowManualSession(true);
+  }
+
+  function closeManualSession() {
+    if (manualSessionMutation.isPending) return;
+    setShowManualSession(false);
+    setManualSubjectId("");
+    setManualContentId("");
+    setManualStartedAt("");
+    setManualDuration("");
+    setManualNotes("");
+    manualSessionMutation.reset();
+  }
+
   if (auth.isPending) {
     return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
   }
@@ -1026,6 +1417,17 @@ function ProtectedStudyCyclesPage() {
             <button className="primary-button" type="button" onClick={openSuggestion} disabled={showSuggestion}>Gerar ciclo sugerido</button>
           </div>
         </div>
+        <section className="study-capture-bar" aria-label="Registrar estudo concluído">
+          <span className="study-capture-mark" aria-hidden="true">＋</span>
+          <div>
+            <strong>Estudou sem o cronômetro?</strong>
+            <p>Registre a data e o tempo líquido; o ciclo e o histórico são atualizados juntos.</p>
+          </div>
+          <div className="study-capture-actions">
+            <button className="text-button" type="button" onClick={() => setShowStudyHistory((visible) => !visible)}>Histórico</button>
+            <button className="secondary-button" type="button" onClick={openManualSession}>Registrar estudo</button>
+          </div>
+        </section>
         {currentSession.data && (
           <StudySessionDesk
             session={currentSession.data}
@@ -1041,6 +1443,21 @@ function ProtectedStudyCyclesPage() {
         )}
         {currentSession.isError && (
           <p className="form-error" role="alert">Não foi possível recuperar o cronômetro aberto.</p>
+        )}
+        {showStudyHistory && (
+          <>
+            <ExerciseSummaryPanel
+              summary={exerciseSummary.data}
+              pending={exerciseSummary.isPending}
+              error={exerciseSummary.isError}
+            />
+            <StudySessionHistory
+              sessions={studyHistory.data ?? []}
+              pending={studyHistory.isPending}
+              error={studyHistory.isError}
+              onEditExercises={(session) => { exerciseResultMutation.reset(); setEditingExerciseSession(session); }}
+            />
+          </>
         )}
         {showSuggestion && (
           <section className="cycle-suggestion-composer" aria-labelledby="suggestion-title">
@@ -1458,7 +1875,42 @@ function ProtectedStudyCyclesPage() {
               : undefined}
             onDurationChange={setEffectiveDuration}
             onCancel={closeFinishSession}
-            onSubmit={(effectiveSeconds) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds })}
+            onSubmit={(effectiveSeconds, exerciseResult) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds, exerciseResult })}
+          />
+        )}
+        {editingExerciseSession && (
+          <ExerciseResultDialog
+            session={editingExerciseSession}
+            pending={exerciseResultMutation.isPending}
+            error={exerciseResultMutation.isError
+              ? exerciseResultMutation.error instanceof ApiError ? exerciseResultMutation.error.message : "Não foi possível atualizar os exercícios."
+              : undefined}
+            onCancel={() => { if (!exerciseResultMutation.isPending) setEditingExerciseSession(undefined); }}
+            onSubmit={(input) => exerciseResultMutation.mutate({ session: editingExerciseSession, input })}
+          />
+        )}
+        {showManualSession && (
+          <ManualStudySessionDialog
+            subjects={subjects.data ?? []}
+            contents={manualContents.data ?? []}
+            selectedSubjectId={manualSubjectId}
+            selectedContentId={manualContentId}
+            startedAtLocal={manualStartedAt}
+            effectiveDuration={manualDuration}
+            notes={manualNotes}
+            loadingSubjects={subjects.isPending}
+            loadingContents={manualContents.isPending}
+            pending={manualSessionMutation.isPending}
+            error={manualSessionMutation.isError
+              ? manualSessionMutation.error instanceof ApiError ? manualSessionMutation.error.message : "Não foi possível registrar o estudo concluído."
+              : undefined}
+            onSubjectChange={(subjectId) => { setManualSubjectId(subjectId); setManualContentId(""); }}
+            onContentChange={setManualContentId}
+            onStartedAtChange={setManualStartedAt}
+            onDurationChange={setManualDuration}
+            onNotesChange={setManualNotes}
+            onCancel={closeManualSession}
+            onSubmit={(effectiveSeconds) => manualSessionMutation.mutate(effectiveSeconds)}
           />
         )}
       </main>
