@@ -1,12 +1,18 @@
 package br.com.estudalivre.studycycle.service;
 
 import br.com.estudalivre.studycycle.dto.CreateStudyCycleRequest;
+import br.com.estudalivre.studycycle.dto.CreateSuggestedStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CycleSwitchAction;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
+import br.com.estudalivre.studycycle.dto.StudyCycleSuggestionResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
 import br.com.estudalivre.studycycle.model.StudyCycle;
+import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleInput;
+import br.com.estudalivre.studycycle.planner.SuggestedStudyCyclePlanner;
+import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleSubject;
 import br.com.estudalivre.studycycle.repository.StudyCycleRepository;
 import br.com.estudalivre.subject.service.SubjectService;
+import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -17,10 +23,46 @@ public class StudyCycleService {
 
     private final StudyCycleRepository studyCycleRepository;
     private final SubjectService subjectService;
+    private final SuggestedStudyCyclePlanner suggestedStudyCyclePlanner;
 
-    public StudyCycleService(StudyCycleRepository studyCycleRepository, SubjectService subjectService) {
+    public StudyCycleService(
+            StudyCycleRepository studyCycleRepository,
+            SubjectService subjectService,
+            SuggestedStudyCyclePlanner suggestedStudyCyclePlanner) {
         this.studyCycleRepository = studyCycleRepository;
         this.subjectService = subjectService;
+        this.suggestedStudyCyclePlanner = suggestedStudyCyclePlanner;
+    }
+
+    @Transactional
+    public StudyCycleResponse createSuggested(UUID ownerId, CreateSuggestedStudyCycleRequest request) {
+        var seenSubjectIds = new HashSet<UUID>();
+        List<SuggestedStudyCycleInput> inputs = request.subjects().stream()
+                .map(subject -> {
+                    if (!seenSubjectIds.add(subject.subjectId())) {
+                        throw new IllegalArgumentException("Cada matéria deve aparecer apenas uma vez na sugestão.");
+                    }
+                    var ownedSubject = subjectService.getActive(ownerId, subject.subjectId());
+                    return new SuggestedStudyCycleInput(
+                            subject.subjectId(),
+                            ownedSubject.name(),
+                            subject.questionCount(),
+                            subject.weight(),
+                            subject.difficulty());
+                })
+                .toList();
+        var plan = suggestedStudyCyclePlanner.generate(inputs);
+        UUID cycleId = UUID.randomUUID();
+        studyCycleRepository.createSuggested(cycleId, ownerId, request.name());
+        for (int index = 0; index < plan.subjects().size(); index++) {
+            studyCycleRepository.createSuggestionSubject(cycleId, index + 1, plan.subjects().get(index));
+        }
+        for (int index = 0; index < plan.stages().size(); index++) {
+            var stage = plan.stages().get(index);
+            studyCycleRepository.createStage(
+                    UUID.randomUUID(), cycleId, stage.subjectId(), index + 1, stage.targetMinutes());
+        }
+        return toResponse(findOwned(cycleId, ownerId));
     }
 
     @Transactional
@@ -57,6 +99,7 @@ public class StudyCycleService {
         if (studyCycleRepository.update(cycleId, ownerId, request.name()) == 0) {
             throw new StudyCycleNotFoundException();
         }
+        studyCycleRepository.deleteSuggestion(cycleId);
         studyCycleRepository.deleteStages(cycleId);
         for (int index = 0; index < request.stages().size(); index++) {
             var stage = request.stages().get(index);
@@ -102,9 +145,19 @@ public class StudyCycleService {
     }
 
     private StudyCycleResponse toResponse(StudyCycle cycle) {
+        var stages = studyCycleRepository.findStages(cycle.id());
+        var suggestionSubjects = cycle.mode().equals("SUGGESTED")
+                ? studyCycleRepository.findSuggestionSubjects(cycle.id())
+                : List.<SuggestedStudyCycleSubject>of();
+        StudyCycleSuggestionResponse suggestion = suggestionSubjects.isEmpty()
+                ? null
+                : StudyCycleSuggestionResponse.from(
+                        stages.stream().mapToInt(stage -> stage.targetMinutes()).sum(),
+                        suggestionSubjects);
         return StudyCycleResponse.from(
                 cycle,
-                studyCycleRepository.findStages(cycle.id()),
-                studyCycleRepository.findCurrentRun(cycle.id()).orElse(null));
+                stages,
+                studyCycleRepository.findCurrentRun(cycle.id()).orElse(null),
+                suggestion);
     }
 }
