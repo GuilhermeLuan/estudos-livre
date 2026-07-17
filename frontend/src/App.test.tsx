@@ -957,6 +957,8 @@ describe("authentication journey", () => {
     const dialog = await screen.findByRole("dialog", { name: "Finalizar sessão" });
     expect(within(dialog).getByText("01:02:03")).toBeVisible();
     expect(within(dialog).getByText("Etapa 01 · Matemática")).toBeVisible();
+    expect(within(dialog).getByRole("checkbox", { name: "Agendar revisões deste conteúdo" }))
+      .toBeChecked();
     const effectiveDuration = within(dialog).getByLabelText("Duração efetiva");
     expect(effectiveDuration).toHaveValue("01:02:03");
     fireEvent.change(effectiveDuration, { target: { value: "00:45:00" } });
@@ -973,12 +975,252 @@ describe("authentication journey", () => {
           effectiveSeconds: 2700,
           expectedVersion: 0,
           questionsAttempted: 10,
-          questionsCorrect: 8
+          questionsCorrect: 8,
+          scheduleReviews: true
         })
       })
     ));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Finalizar sessão" })).not.toBeInTheDocument());
     expect(screen.queryByRole("region", { name: "Cronômetro em andamento" })).not.toBeInTheDocument();
+  });
+
+  it("separates overdue, today and future reviews without shifting their civil dates", async () => {
+    window.history.pushState({}, "", "/revisoes");
+    const reviews = [
+      {
+        occurrenceId: "occurrence-overdue",
+        planId: "plan-1",
+        subjectId: "subject-1",
+        subjectName: "Direito Constitucional",
+        contentId: "content-1",
+        contentName: "Direitos fundamentais",
+        initialStudyDate: "2026-07-01",
+        intervalDays: 7,
+        dueDate: "2026-07-15",
+        timing: "OVERDUE"
+      },
+      {
+        occurrenceId: "occurrence-today",
+        planId: "plan-2",
+        subjectId: "subject-2",
+        subjectName: "Língua Portuguesa",
+        contentId: "content-2",
+        contentName: "Concordância verbal",
+        initialStudyDate: "2026-07-16",
+        intervalDays: 1,
+        dueDate: "2026-07-17",
+        timing: "TODAY"
+      },
+      {
+        occurrenceId: "occurrence-future",
+        planId: "plan-3",
+        subjectId: "subject-3",
+        subjectName: "Administração Pública",
+        contentId: "content-3",
+        contentName: "Governança",
+        initialStudyDate: "2026-01-01",
+        intervalDays: 120,
+        dueDate: "2027-01-01",
+        timing: "FUTURE"
+      }
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/reviews") return jsonResponse(reviews);
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Revisões" })).toBeVisible();
+    screen.getAllByRole("link", { name: "Revisões" })
+      .forEach((link) => expect(link).toHaveAttribute("aria-current", "page"));
+    expect(within(await screen.findByRole("region", { name: "Revisões de hoje" })).getByText("Concordância verbal")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Revisões atrasadas" })).getByText("Direitos fundamentais")).toBeVisible();
+    const future = screen.getByRole("region", { name: "Próximas revisões" });
+    expect(within(future).getByText("Governança")).toBeVisible();
+    expect(within(future).getByText("1 de jan. de 2027")).toBeVisible();
+    expect(within(screen.getByRole("region", { name: "Revisões de hoje" })).getByRole("button", { name: "Iniciar revisão de Concordância verbal" })).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "Revisões atrasadas" })).getByRole("button", { name: "Iniciar revisão de Direitos fundamentais" })).toBeEnabled();
+    expect(within(future).queryByRole("button", { name: /Iniciar revisão/ })).not.toBeInTheDocument();
+  });
+
+  it("starts a due review and carries its locked context to the study desk", async () => {
+    window.history.pushState({}, "", "/revisoes");
+    document.cookie = "XSRF-TOKEN=review-token; Path=/";
+    const review = {
+      occurrenceId: "occurrence-today",
+      planId: "plan-1",
+      subjectId: "subject-1",
+      subjectName: "Direito Administrativo",
+      contentId: "content-1",
+      contentName: "Atos administrativos",
+      initialStudyDate: "2026-07-16",
+      intervalDays: 1,
+      dueDate: "2026-07-17",
+      timing: "TODAY"
+    };
+    const reviewSession = {
+      id: "session-review",
+      origin: "REVIEW",
+      status: "ACTIVE",
+      subject: { id: "subject-1", name: "Direito Administrativo" },
+      content: { id: "content-1", name: "Atos administrativos" },
+      cycle: null,
+      startedAt: "2026-07-17T12:00:00Z",
+      notes: null,
+      measuredSeconds: 0,
+      effectiveSeconds: null,
+      finishedAt: null,
+      version: 0,
+      exerciseResult: null,
+      credits: [],
+      serverNow: "2026-07-17T12:00:00Z"
+    };
+    let reviewFinished = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/reviews") return jsonResponse(reviewFinished ? [] : [review]);
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/reviews/occurrence-today/start" && init?.method === "POST") return jsonResponse(reviewSession, 201);
+      if (url === "/api/study-sessions/session-review/finish" && init?.method === "POST") {
+        reviewFinished = true;
+        return jsonResponse({
+          ...reviewSession,
+          status: "FINISHED",
+          effectiveSeconds: 600,
+          finishedAt: "2026-07-17T12:10:00Z",
+          version: 1,
+          credits: [{ runStageId: "run-stage-1", cycleId: "cycle-1", runId: "run-1", cycleStageId: "stage-1", stagePosition: 1, creditedSeconds: 600 }]
+        });
+      }
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Iniciar revisão de Atos administrativos" }));
+    expect(await screen.findByRole("region", { name: "Cronômetro em andamento" })).toHaveTextContent("Revisão");
+    expect(screen.getByRole("region", { name: "Cronômetro em andamento" })).toHaveTextContent("Direito Administrativo");
+    expect(screen.getByRole("region", { name: "Cronômetro em andamento" })).toHaveTextContent("Atos administrativos");
+    expect(window.location.pathname).toBe("/ciclos");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/reviews/occurrence-today/start",
+      expect.objectContaining({ method: "POST" })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Finalizar" }));
+    const dialog = await screen.findByRole("dialog", { name: "Finalizar sessão" });
+    expect(within(dialog).queryByRole("checkbox", { name: "Agendar revisões deste conteúdo" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("Crédito ao ciclo ativo")).toBeVisible();
+    expect(within(dialog).getByText("Revisão · Direito Administrativo")).toBeVisible();
+    fireEvent.change(within(dialog).getByLabelText("Duração efetiva"), { target: { value: "00:10:00" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Finalizar sessão" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/session-review/finish",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ effectiveSeconds: 600, expectedVersion: 0, scheduleReviews: false })
+      })
+    ));
+    fireEvent.click(screen.getAllByRole("link", { name: "Revisões" })[0]);
+    expect(await screen.findByRole("region", { name: "Fila de revisões vazia" })).toBeVisible();
+  });
+
+  it("keeps review actions locked while another study session is open", async () => {
+    window.history.pushState({}, "", "/revisoes");
+    const review = {
+      occurrenceId: "occurrence-overdue",
+      planId: "plan-1",
+      subjectId: "subject-1",
+      subjectName: "Direito Penal",
+      contentId: "content-1",
+      contentName: "Teoria do crime",
+      initialStudyDate: "2026-07-01",
+      intervalDays: 7,
+      dueDate: "2026-07-15",
+      timing: "OVERDUE"
+    };
+    const openSession = {
+      id: "session-open",
+      origin: "FREE",
+      status: "PAUSED",
+      subject: { id: "subject-2", name: "Informática" },
+      content: null,
+      cycle: null,
+      startedAt: "2026-07-17T11:00:00Z",
+      notes: null,
+      measuredSeconds: 300,
+      effectiveSeconds: null,
+      finishedAt: null,
+      version: 0,
+      exerciseResult: null,
+      credits: [],
+      serverNow: "2026-07-17T12:00:00Z"
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/reviews") return jsonResponse([review]);
+      if (url === "/api/study-sessions/current") return jsonResponse(openSession);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    renderApp();
+
+    expect(await screen.findByText("Conclua a sessão em andamento antes de iniciar uma revisão.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Iniciar revisão de Teoria do crime" })).toBeDisabled();
+  });
+
+  it("moves from the review loading state to actionable empty guidance", async () => {
+    window.history.pushState({}, "", "/revisoes");
+    let resolveReviews: ((response: Response) => void) | undefined;
+    const pendingReviews = new Promise<Response>((resolve) => { resolveReviews = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/reviews") return pendingReviews;
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByText("Organizando sua fila de revisões…")).toBeVisible();
+    resolveReviews?.(jsonResponse([]));
+    expect(await screen.findByRole("region", { name: "Fila de revisões vazia" })).toHaveTextContent(
+      "Finalize uma sessão com conteúdo e mantenha a opção de revisões marcada."
+    );
+  });
+
+  it("offers an immediate retry when the review queue cannot be loaded", async () => {
+    window.history.pushState({}, "", "/revisoes");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/reviews") return new Response(null, { status: 503 });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Não foi possível consultar suas revisões.");
+    expect(within(alert).getByRole("button", { name: "Tentar novamente" })).toBeEnabled();
   });
 
   it("asks how to switch cycles and pauses the current run when chosen", async () => {

@@ -175,7 +175,12 @@ test("edits a custom study cycle without horizontal overflow on a phone", async 
   await expect(page.getByRole("region", { name: "Total por matéria" })).toBeVisible();
   await expect(page.getByLabel("Total de Língua Portuguesa: 30min")).toBeVisible();
   await expect(page.getByLabel("Total de Matemática: 4h")).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Navegação móvel" }).getByRole("link")).toHaveCount(3);
+  await expect(page.getByRole("navigation", { name: "Navegação móvel" }).getByRole("link")).toHaveText([
+    "Matérias",
+    "Ciclos",
+    "Revisões",
+    "Conta"
+  ]);
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth

@@ -2,7 +2,7 @@ import { apiFetch, requireSuccess } from "./auth-api";
 
 export type StudySession = {
   id: string;
-  origin: "CYCLE" | "FREE" | "MANUAL";
+  origin: "CYCLE" | "FREE" | "MANUAL" | "REVIEW";
   status: "ACTIVE" | "PAUSED" | "FINISHED";
   subject: { id: string; name: string };
   content: { id: string; name: string } | null;
@@ -150,12 +150,13 @@ export async function finishStudySession(
   id: string,
   effectiveSeconds: number,
   expectedVersion: number,
-  exerciseResult?: ExerciseResultInput
+  exerciseResult?: ExerciseResultInput,
+  scheduleReviews = false
 ): Promise<StudySession> {
   const response = await apiFetch(`/api/study-sessions/${id}/finish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ effectiveSeconds, expectedVersion, ...exerciseResult })
+    body: JSON.stringify({ effectiveSeconds, expectedVersion, ...exerciseResult, scheduleReviews })
   });
   await requireSuccess(response, "Não foi possível finalizar a sessão.");
   return response.json() as Promise<StudySession>;

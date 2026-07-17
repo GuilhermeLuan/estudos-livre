@@ -88,7 +88,7 @@ public class StudySessionController {
             @AuthenticationPrincipal IdentityPrincipal principal,
             @PathVariable UUID id,
             @Valid @RequestBody FinishStudySessionRequest request) {
-        return studySessionService.finish(principal.id(), id, request);
+        return studySessionService.finish(principal.id(), principal.timeZone(), id, request);
     }
 
     @PutMapping("/{id}/exercise-result")

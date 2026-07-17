@@ -7,5 +7,6 @@ public record FinishStudySessionRequest(
         @NotNull @PositiveOrZero Long effectiveSeconds,
         @NotNull @PositiveOrZero Integer expectedVersion,
         @PositiveOrZero Integer questionsAttempted,
-        @PositiveOrZero Integer questionsCorrect) {
+        @PositiveOrZero Integer questionsCorrect,
+        Boolean scheduleReviews) {
 }

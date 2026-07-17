@@ -8,8 +8,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SpaController {
 
-    @GetMapping("/redefinir-senha")
-    public String passwordReset() {
+    @GetMapping({"/redefinir-senha", "/revisoes"})
+    public String reactApplication() {
         return "forward:/index.html";
     }
 }
