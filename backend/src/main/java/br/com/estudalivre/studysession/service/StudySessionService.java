@@ -1,9 +1,13 @@
 package br.com.estudalivre.studysession.service;
 
 import br.com.estudalivre.studysession.dto.FinishStudySessionRequest;
+import br.com.estudalivre.studysession.dto.CreateManualStudySessionRequest;
 import br.com.estudalivre.studysession.dto.StartStudySessionRequest;
 import br.com.estudalivre.studysession.dto.StudySessionOrigin;
 import br.com.estudalivre.studysession.dto.StudySessionResponse;
+import br.com.estudalivre.studysession.dto.UpdateExerciseResultRequest;
+import br.com.estudalivre.studysession.dto.ExerciseSummaryResponse;
+import br.com.estudalivre.studysession.model.ExerciseResult;
 import br.com.estudalivre.studysession.repository.StudySessionRepository;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
 import br.com.estudalivre.studycycle.dto.StudyCycleStageResponse;
@@ -14,6 +18,7 @@ import br.com.estudalivre.subject.service.ContentService;
 import br.com.estudalivre.subject.service.SubjectService;
 import java.util.Optional;
 import java.util.UUID;
+import java.time.ZoneId;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -75,6 +80,46 @@ public class StudySessionService {
     }
 
     @Transactional
+    public StudySessionResponse createManual(
+            UUID ownerId,
+            String timeZone,
+            CreateManualStudySessionRequest request) {
+        subjectService.getActive(ownerId, request.subjectId());
+        validateOptionalContent(ownerId, request.subjectId(), request.contentId());
+        var startedAt = request.startedAtLocal().atZone(ZoneId.of(timeZone)).toOffsetDateTime();
+        UUID sessionId = UUID.randomUUID();
+        studySessionRepository.createManual(
+                sessionId,
+                ownerId,
+                request.subjectId(),
+                request.contentId(),
+                startedAt,
+                startedAt.plusSeconds(request.effectiveSeconds()),
+                request.effectiveSeconds(),
+                request.notes());
+        studyCycleRepository.findActiveByOwnerId(ownerId)
+                .flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()))
+                .ifPresent(run -> applyCreditsToRun(
+                        sessionId, run.id(), request.subjectId(), request.effectiveSeconds()));
+        return findOwned(sessionId, ownerId);
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<StudySessionResponse> history(UUID ownerId) {
+        return studySessionRepository.findHistoryByOwnerId(ownerId).stream()
+                .map(session -> StudySessionResponse.from(
+                        session, studySessionRepository.findCredits(session.id())))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ExerciseSummaryResponse exerciseSummary(UUID ownerId) {
+        return ExerciseSummaryResponse.from(
+                studySessionRepository.findSubjectExerciseSummary(ownerId),
+                studySessionRepository.findContentExerciseSummary(ownerId));
+    }
+
+    @Transactional
     public StudySessionResponse pause(UUID ownerId, UUID sessionId) {
         String status = lockOwnedStatus(sessionId, ownerId);
         if (!status.equals("ACTIVE")) {
@@ -102,6 +147,8 @@ public class StudySessionService {
 
     @Transactional
     public StudySessionResponse finish(UUID ownerId, UUID sessionId, FinishStudySessionRequest request) {
+        Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
+                request.questionsAttempted(), request.questionsCorrect());
         var state = studySessionRepository.findFinishStateForUpdate(sessionId, ownerId)
                 .orElseThrow(StudySessionNotFoundException::new);
         if (state.status().equals("FINISHED")) {
@@ -121,26 +168,54 @@ public class StudySessionService {
             throw new StudySessionFinishConflictException();
         }
         if (state.cycleRunId() != null) {
-            var runStages = studyCycleRepository.findRunStagesForUpdate(state.cycleRunId());
-            var distribution = studyCreditDistributor.distribute(
-                    runStages, state.subjectId(), request.effectiveSeconds());
-            distribution.allocations().forEach(allocation -> {
-                if (studyCycleRepository.creditRunStage(
-                        allocation.runStageId(), allocation.creditedSeconds()) != 1) {
-                    throw new StudySessionFinishConflictException();
-                }
-                studySessionRepository.createCredit(
-                        sessionId, allocation.runStageId(), allocation.creditedSeconds());
-            });
-            if (!runStages.isEmpty()
-                    && studyCycleRepository.completeRunIfFinished(state.cycleRunId()) == 1) {
-                UUID nextRunId = UUID.randomUUID();
-                UUID cycleId = runStages.getFirst().cycleId();
-                studyCycleRepository.createRun(nextRunId, cycleId);
-                studyCycleRepository.snapshotRunStages(nextRunId, cycleId);
-            }
+            applyCreditsToRun(
+                    sessionId, state.cycleRunId(), state.subjectId(), request.effectiveSeconds());
+        }
+        exerciseResult.ifPresent(result -> studySessionRepository.saveExerciseResult(sessionId, result));
+        return findOwned(sessionId, ownerId);
+    }
+
+    @Transactional
+    public StudySessionResponse updateExerciseResult(
+            UUID ownerId,
+            UUID sessionId,
+            UpdateExerciseResultRequest request) {
+        Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
+                request.questionsAttempted(), request.questionsCorrect());
+        String status = lockOwnedStatus(sessionId, ownerId);
+        if (!status.equals("FINISHED")) {
+            throw new InvalidStudySessionTransitionException(
+                    "Somente uma sessão finalizada pode ter seus exercícios editados.");
+        }
+        if (exerciseResult.isPresent()) {
+            studySessionRepository.saveExerciseResult(sessionId, exerciseResult.orElseThrow());
+        } else {
+            studySessionRepository.deleteExerciseResult(sessionId);
         }
         return findOwned(sessionId, ownerId);
+    }
+
+    private void applyCreditsToRun(
+            UUID sessionId,
+            UUID runId,
+            UUID subjectId,
+            long effectiveSeconds) {
+        var runStages = studyCycleRepository.findRunStagesForUpdate(runId);
+        var distribution = studyCreditDistributor.distribute(runStages, subjectId, effectiveSeconds);
+        distribution.allocations().forEach(allocation -> {
+            if (studyCycleRepository.creditRunStage(
+                    allocation.runStageId(), allocation.creditedSeconds()) != 1) {
+                throw new StudySessionFinishConflictException();
+            }
+            studySessionRepository.createCredit(
+                    sessionId, allocation.runStageId(), allocation.creditedSeconds());
+        });
+        if (!runStages.isEmpty() && studyCycleRepository.completeRunIfFinished(runId) == 1) {
+            UUID nextRunId = UUID.randomUUID();
+            UUID cycleId = runStages.getFirst().cycleId();
+            studyCycleRepository.createRun(nextRunId, cycleId);
+            studyCycleRepository.snapshotRunStages(nextRunId, cycleId);
+        }
     }
 
     private SessionContext cycleContext(UUID ownerId, StartStudySessionRequest request) {

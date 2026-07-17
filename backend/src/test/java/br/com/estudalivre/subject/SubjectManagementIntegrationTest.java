@@ -51,6 +51,7 @@ class SubjectManagementIntegrationTest {
 
     private void cleanDatabase() {
         jdbcTemplate.update("DELETE FROM spring_session");
+        jdbcTemplate.update("DELETE FROM study_session");
         jdbcTemplate.update("DELETE FROM subject");
         jdbcTemplate.update("DELETE FROM identity_user");
     }
