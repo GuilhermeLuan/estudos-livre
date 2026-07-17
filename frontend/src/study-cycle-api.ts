@@ -86,6 +86,20 @@ export async function createSuggestedStudyCycle(
   return response.json() as Promise<StudyCycle>;
 }
 
+export async function regenerateStudyCycleSuggestion(
+  id: string,
+  name: string,
+  subjects: SuggestedStudyCycleSubjectInput[]
+): Promise<StudyCycle> {
+  const response = await apiFetch(`/api/study-cycles/${id}/suggestion`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, subjects })
+  });
+  await requireSuccess(response, "Não foi possível regenerar a sugestão.");
+  return response.json() as Promise<StudyCycle>;
+}
+
 export async function updateStudyCycle(
   id: string,
   name: string,

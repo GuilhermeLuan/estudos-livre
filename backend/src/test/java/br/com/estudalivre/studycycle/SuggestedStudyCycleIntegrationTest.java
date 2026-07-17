@@ -141,6 +141,126 @@ class SuggestedStudyCycleIntegrationTest {
                 .andExpect(jsonPath("$.suggestion").doesNotExist());
     }
 
+    @Test
+    void ownerExplicitlyRegeneratesACustomizedSuggestionAndReplacesItsStages() throws Exception {
+        IdentityPrincipal principal = createUser("pessoa@example.com");
+        UUID portugueseId = createSubject(principal, "Português");
+        UUID lawId = createSubject(principal, "Direito");
+        String creation = mockMvc.perform(withSpaCsrf(post("/api/study-cycles/suggestions")
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Sugestão inicial",
+                                  "subjects":[
+                                    {"subjectId":"%s","questionCount":20,"weight":2,"difficulty":"MEDIUM"}
+                                  ]
+                                }
+                                """.formatted(portugueseId))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID cycleId = UUID.fromString(JsonPath.read(creation, "$.id"));
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}", cycleId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Minha organização",
+                                  "stages":[{"subjectId":"%s","targetMinutes":90}]
+                                }
+                                """.formatted(portugueseId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mode").value("CUSTOM"))
+                .andExpect(jsonPath("$.totalMinutes").value(90));
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}/suggestion", cycleId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Nova sugestão",
+                                  "subjects":[
+                                    {"subjectId":"%s","questionCount":30,"weight":2,"difficulty":"HARD"},
+                                    {"subjectId":"%s","questionCount":10,"weight":1,"difficulty":"EASY"}
+                                  ]
+                                }
+                                """.formatted(lawId, portugueseId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Nova sugestão"))
+                .andExpect(jsonPath("$.mode").value("SUGGESTED"))
+                .andExpect(jsonPath("$.totalMinutes").value(600))
+                .andExpect(jsonPath("$.suggestion.subjects[0].subjectName").value("Direito"))
+                .andExpect(jsonPath("$.suggestion.subjects[1].subjectName").value("Português"))
+                .andExpect(jsonPath("$.stages.length()", org.hamcrest.Matchers.greaterThan(1)))
+                .andExpect(jsonPath("$.stages[0].targetMinutes").value(org.hamcrest.Matchers.not(90)));
+
+        mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.mode").value("SUGGESTED"))
+                .andExpect(jsonPath("$.suggestion.subjects.length()").value(2))
+                .andExpect(jsonPath("$.totalMinutes").value(600));
+    }
+
+    @Test
+    void rejectedRegenerationPreservesTheCustomizedPlanning() throws Exception {
+        IdentityPrincipal owner = createUser("dona@example.com");
+        IdentityPrincipal otherUser = createUser("outra@example.com");
+        UUID ownerSubjectId = createSubject(owner, "Português");
+        UUID otherSubjectId = createSubject(otherUser, "Matemática");
+        String creation = mockMvc.perform(withSpaCsrf(post("/api/study-cycles/suggestions")
+                        .with(user(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Sugestão inicial",
+                                  "subjects":[
+                                    {"subjectId":"%s","questionCount":20,"weight":2,"difficulty":"MEDIUM"}
+                                  ]
+                                }
+                                """.formatted(ownerSubjectId))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID cycleId = UUID.fromString(JsonPath.read(creation, "$.id"));
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}", cycleId)
+                        .with(user(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Planejamento preservado",
+                                  "stages":[{"subjectId":"%s","targetMinutes":90}]
+                                }
+                                """.formatted(ownerSubjectId))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}/suggestion", cycleId)
+                        .with(user(owner))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Tentativa inválida",
+                                  "subjects":[
+                                    {"subjectId":"%s","questionCount":10,"weight":1,"difficulty":"EASY"}
+                                  ]
+                                }
+                                """.formatted(otherSubjectId))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Matéria não encontrada"));
+
+        mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(owner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Planejamento preservado"))
+                .andExpect(jsonPath("$.mode").value("CUSTOM"))
+                .andExpect(jsonPath("$.suggestion").doesNotExist())
+                .andExpect(jsonPath("$.totalMinutes").value(90))
+                .andExpect(jsonPath("$.stages.length()").value(1));
+    }
+
     private void cleanDatabase() {
         jdbcTemplate.update("DELETE FROM spring_session");
         jdbcTemplate.update("DELETE FROM study_cycle_run");

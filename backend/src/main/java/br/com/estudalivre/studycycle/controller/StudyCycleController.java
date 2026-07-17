@@ -67,6 +67,14 @@ public class StudyCycleController {
         return studyCycleService.update(principal.id(), id, request);
     }
 
+    @PutMapping("/{id}/suggestion")
+    public StudyCycleResponse regenerateSuggestion(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id,
+            @Valid @RequestBody CreateSuggestedStudyCycleRequest request) {
+        return studyCycleService.regenerateSuggestion(principal.id(), id, request);
+    }
+
     @PostMapping("/{id}/activate")
     public StudyCycleResponse activate(
             @AuthenticationPrincipal IdentityPrincipal principal,
