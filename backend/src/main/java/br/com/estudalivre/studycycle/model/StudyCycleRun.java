@@ -8,5 +8,6 @@ public record StudyCycleRun(
         UUID cycleId,
         int number,
         String status,
-        OffsetDateTime startedAt) {
+        OffsetDateTime startedAt,
+        OffsetDateTime endedAt) {
 }

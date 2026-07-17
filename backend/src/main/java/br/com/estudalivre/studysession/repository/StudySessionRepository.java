@@ -1,6 +1,7 @@
 package br.com.estudalivre.studysession.repository;
 
 import br.com.estudalivre.studysession.model.StudySession;
+import br.com.estudalivre.studysession.model.StudySessionCredit;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -29,6 +30,9 @@ public class StudySessionRepository {
                    study_cycle_stage.position AS stage_position,
                    study_cycle_stage.target_minutes,
                    study_session.started_at,
+                   study_session.effective_seconds,
+                   study_session.finished_at,
+                   study_session.version,
                    (
                        SELECT COALESCE(
                            FLOOR(SUM(EXTRACT(EPOCH FROM (
@@ -127,6 +131,26 @@ public class StudySessionRepository {
                 .optional();
     }
 
+    public Optional<FinishState> findFinishStateForUpdate(UUID id, UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT status, origin, subject_id, cycle_run_id,
+                               effective_seconds, version
+                        FROM study_session
+                        WHERE id = :id AND owner_id = :ownerId
+                        FOR UPDATE
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .query((resultSet, rowNumber) -> new FinishState(
+                        resultSet.getString("status"),
+                        resultSet.getString("origin"),
+                        resultSet.getObject("subject_id", UUID.class),
+                        resultSet.getObject("cycle_run_id", UUID.class),
+                        resultSet.getObject("effective_seconds", Long.class),
+                        resultSet.getInt("version")))
+                .optional();
+    }
+
     public int pause(UUID id, UUID ownerId) {
         return jdbcClient.sql("""
                         UPDATE study_session
@@ -159,6 +183,55 @@ public class StudySessionRepository {
                 .update();
     }
 
+    public int finish(UUID id, UUID ownerId, long effectiveSeconds, int expectedVersion) {
+        return jdbcClient.sql("""
+                        UPDATE study_session
+                        SET status = 'FINISHED', effective_seconds = :effectiveSeconds,
+                            finished_at = CURRENT_TIMESTAMP, version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND owner_id = :ownerId
+                          AND status IN ('ACTIVE', 'PAUSED')
+                          AND version = :expectedVersion
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .param("effectiveSeconds", effectiveSeconds)
+                .param("expectedVersion", expectedVersion)
+                .update();
+    }
+
+    public void createCredit(UUID sessionId, UUID runStageId, long creditedSeconds) {
+        jdbcClient.sql("""
+                        INSERT INTO study_session_credit (session_id, run_stage_id, credited_seconds)
+                        VALUES (:sessionId, :runStageId, :creditedSeconds)
+                        """)
+                .param("sessionId", sessionId)
+                .param("runStageId", runStageId)
+                .param("creditedSeconds", creditedSeconds)
+                .update();
+    }
+
+    public java.util.List<StudySessionCredit> findCredits(UUID sessionId) {
+        return jdbcClient.sql("""
+                        SELECT credit.run_stage_id, run_stage.cycle_id, run_stage.run_id,
+                               run_stage.source_stage_id, run_stage.position,
+                               credit.credited_seconds
+                        FROM study_session_credit credit
+                        JOIN study_cycle_run_stage run_stage ON run_stage.id = credit.run_stage_id
+                        WHERE credit.session_id = :sessionId
+                        ORDER BY run_stage.position
+                        """)
+                .param("sessionId", sessionId)
+                .query((resultSet, rowNumber) -> new StudySessionCredit(
+                        resultSet.getObject("run_stage_id", UUID.class),
+                        resultSet.getObject("cycle_id", UUID.class),
+                        resultSet.getObject("run_id", UUID.class),
+                        resultSet.getObject("source_stage_id", UUID.class),
+                        resultSet.getInt("position"),
+                        resultSet.getLong("credited_seconds")))
+                .list();
+    }
+
     private static StudySession mapSession(ResultSet resultSet, int rowNumber) throws SQLException {
         return new StudySession(
                 resultSet.getObject("id", UUID.class),
@@ -178,6 +251,18 @@ public class StudySessionRepository {
                 resultSet.getObject("target_minutes", Integer.class),
                 resultSet.getObject("started_at", OffsetDateTime.class),
                 resultSet.getLong("measured_seconds"),
+                resultSet.getObject("effective_seconds", Long.class),
+                resultSet.getObject("finished_at", OffsetDateTime.class),
+                resultSet.getInt("version"),
                 resultSet.getObject("server_now", OffsetDateTime.class));
+    }
+
+    public record FinishState(
+            String status,
+            String origin,
+            UUID subjectId,
+            UUID cycleRunId,
+            Long effectiveSeconds,
+            int version) {
     }
 }

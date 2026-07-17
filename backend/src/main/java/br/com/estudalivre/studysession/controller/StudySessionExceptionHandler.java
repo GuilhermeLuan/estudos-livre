@@ -4,6 +4,7 @@ import br.com.estudalivre.studysession.service.InvalidStudySessionTransitionExce
 import br.com.estudalivre.studysession.service.OpenStudySessionAlreadyExistsException;
 import br.com.estudalivre.studysession.service.StudyCycleIsNotActiveException;
 import br.com.estudalivre.studysession.service.StudySessionNotFoundException;
+import br.com.estudalivre.studysession.service.StudySessionFinishConflictException;
 import br.com.estudalivre.studycycle.service.StudyCycleNotFoundException;
 import br.com.estudalivre.subject.service.ContentNotFoundException;
 import br.com.estudalivre.subject.service.SubjectNotFoundException;
@@ -29,6 +30,11 @@ public class StudySessionExceptionHandler {
     @ExceptionHandler(InvalidStudySessionTransitionException.class)
     ProblemDetail invalidTransition(InvalidStudySessionTransitionException exception) {
         return problem(HttpStatus.CONFLICT, "Transição de sessão inválida", "invalid-study-session-transition", exception);
+    }
+
+    @ExceptionHandler(StudySessionFinishConflictException.class)
+    ProblemDetail finishConflict(StudySessionFinishConflictException exception) {
+        return problem(HttpStatus.CONFLICT, "Finalização da sessão está desatualizada", "study-session-finish-conflict", exception);
     }
 
     @ExceptionHandler(StudyCycleIsNotActiveException.class)

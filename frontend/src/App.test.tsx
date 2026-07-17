@@ -490,11 +490,11 @@ describe("authentication journey", () => {
       status: "ACTIVE",
       totalMinutes: 150,
       activatable: true,
-      currentRun: { id: "run-active", number: 3, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z" },
+      currentRun: { id: "run-active", number: 3, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z", currentStagePosition: 1 },
       stages: [
-        { id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 60, longBlockWarning: false },
-        { id: "stage-2", position: 2, subjectId: "subject-2", subjectName: "Matemática", targetMinutes: 45, longBlockWarning: false },
-        { id: "stage-3", position: 3, subjectId: "subject-1", subjectName: "Português", targetMinutes: 45, longBlockWarning: false }
+        { id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 60, creditedSeconds: 0, longBlockWarning: false },
+        { id: "stage-2", position: 2, subjectId: "subject-2", subjectName: "Matemática", targetMinutes: 45, creditedSeconds: 0, longBlockWarning: false },
+        { id: "stage-3", position: 3, subjectId: "subject-1", subjectName: "Português", targetMinutes: 45, creditedSeconds: 0, longBlockWarning: false }
       ],
       createdAt: "2026-07-16T12:00:00Z",
       updatedAt: "2026-07-16T12:00:00Z"
@@ -532,6 +532,91 @@ describe("authentication journey", () => {
     expect(within(currentStage).getByText("0min realizados")).toBeVisible();
     expect(within(currentStage).getByText("1h restantes")).toBeVisible();
     expect(within(currentStage).getByRole("button", { name: "Iniciar Português" })).toBeEnabled();
+  });
+
+  it("uses the persisted current position and opens the cycle run ledger", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const activeCycle = {
+      id: "cycle-active",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "ACTIVE",
+      totalMinutes: 150,
+      activatable: true,
+      currentRun: {
+        id: "run-2",
+        number: 2,
+        status: "IN_PROGRESS",
+        startedAt: "2026-07-17T12:00:00Z",
+        currentStagePosition: 2
+      },
+      stages: [
+        { id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 60, creditedSeconds: 3600, longBlockWarning: false },
+        { id: "stage-2", position: 2, subjectId: "subject-2", subjectName: "Matemática", targetMinutes: 45, creditedSeconds: 600, longBlockWarning: false },
+        { id: "stage-3", position: 3, subjectId: "subject-1", subjectName: "Português", targetMinutes: 45, creditedSeconds: 2700, longBlockWarning: false }
+      ],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-17T12:00:00Z"
+    };
+    const runs = [
+      {
+        id: "run-2",
+        number: 2,
+        status: "IN_PROGRESS",
+        startedAt: "2026-07-17T12:00:00Z",
+        endedAt: null,
+        stages: activeCycle.stages.map((stage) => ({
+          ...stage,
+          sourceStageId: stage.id,
+          targetSeconds: stage.targetMinutes * 60,
+          completed: stage.creditedSeconds >= stage.targetMinutes * 60
+        }))
+      },
+      {
+        id: "run-1",
+        number: 1,
+        status: "COMPLETED",
+        startedAt: "2026-07-16T12:00:00Z",
+        endedAt: "2026-07-16T15:00:00Z",
+        stages: [{
+          id: "snapshot-1",
+          sourceStageId: "stage-1",
+          position: 1,
+          subjectId: "subject-1",
+          subjectName: "Português",
+          targetSeconds: 3600,
+          creditedSeconds: 3600,
+          completed: true
+        }]
+      }
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/study-cycles") return jsonResponse([activeCycle]);
+      if (url === "/api/study-cycles/cycle-active/runs") return jsonResponse(runs);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const activeRegion = await screen.findByRole("region", { name: "Ciclo ativo" });
+    const currentStage = within(activeRegion).getByRole("region", { name: "Etapa atual: Matemática" });
+    expect(within(currentStage).getByText("10min realizados")).toBeVisible();
+    expect(within(currentStage).getByText("35min restantes")).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/study-cycles/cycle-active/runs", expect.anything());
+
+    fireEvent.click(within(activeRegion).getByRole("button", { name: "Abrir caderno de voltas" }));
+
+    const ledger = await within(activeRegion).findByRole("region", { name: "Caderno de voltas" });
+    expect(await within(ledger).findByText("Volta 2")).toBeVisible();
+    expect(within(ledger).getByText("Em andamento")).toBeVisible();
+    expect(within(ledger).getByText("Volta 1")).toBeVisible();
+    expect(within(ledger).getByText("Concluída")).toBeVisible();
+    expect(within(ledger).getAllByText("1h de 1h")).toHaveLength(2);
   });
 
   it("starts the current cycle stage with one optional content", async () => {
@@ -681,6 +766,66 @@ describe("authentication journey", () => {
     ));
     expect(await screen.findByRole("region", { name: "Cronômetro em andamento" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Pausar" })).toBeEnabled();
+  });
+
+  it("confirms the measured duration and submits an adjusted effective duration", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-finalizacao; Path=/";
+    const activeSession = {
+      id: "session-finish",
+      origin: "CYCLE",
+      status: "ACTIVE",
+      subject: { id: "subject-1", name: "Matemática" },
+      content: { id: "content-1", name: "Probabilidade" },
+      cycle: { id: "cycle-1", name: "Reta final", runId: "run-1", runNumber: 2, stageId: "stage-1", stagePosition: 1, targetMinutes: 60 },
+      startedAt: "2026-07-16T10:00:00Z",
+      measuredSeconds: 3723,
+      effectiveSeconds: null,
+      finishedAt: null,
+      version: 0,
+      credits: [],
+      serverNow: "2026-07-16T12:00:00Z"
+    };
+    const finishedSession = {
+      ...activeSession,
+      status: "FINISHED",
+      effectiveSeconds: 2700,
+      finishedAt: "2026-07-16T12:05:00Z",
+      version: 1,
+      credits: [{ runStageId: "run-stage-1", cycleId: "cycle-1", runId: "run-1", cycleStageId: "stage-1", stagePosition: 1, creditedSeconds: 2700 }]
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return jsonResponse(activeSession);
+      if (url === "/api/study-sessions/session-finish/finish" && init?.method === "POST") return jsonResponse(finishedSession);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    const timer = await screen.findByRole("region", { name: "Cronômetro em andamento" });
+    fireEvent.click(within(timer).getByRole("button", { name: "Finalizar" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Finalizar sessão" });
+    expect(within(dialog).getByText("01:02:03")).toBeVisible();
+    expect(within(dialog).getByText("Etapa 01 · Matemática")).toBeVisible();
+    const effectiveDuration = within(dialog).getByLabelText("Duração efetiva");
+    expect(effectiveDuration).toHaveValue("01:02:03");
+    fireEvent.change(effectiveDuration, { target: { value: "00:45:00" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Finalizar sessão" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/session-finish/finish",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ effectiveSeconds: 2700, expectedVersion: 0 })
+      })
+    ));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Finalizar sessão" })).not.toBeInTheDocument());
+    expect(screen.queryByRole("region", { name: "Cronômetro em andamento" })).not.toBeInTheDocument();
   });
 
   it("asks how to switch cycles and pauses the current run when chosen", async () => {
