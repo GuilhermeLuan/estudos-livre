@@ -3,6 +3,9 @@ package br.com.estudalivre.studycycle.repository;
 import br.com.estudalivre.studycycle.model.StudyCycle;
 import br.com.estudalivre.studycycle.model.StudyCycleRun;
 import br.com.estudalivre.studycycle.model.StudyCycleStage;
+import br.com.estudalivre.studycycle.planner.StudyCycleDifficulty;
+import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleSubject;
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
@@ -30,6 +33,65 @@ public class StudyCycleRepository {
                 .param("ownerId", ownerId)
                 .param("name", name)
                 .update();
+    }
+
+    public void createSuggested(UUID id, UUID ownerId, String name) {
+        jdbcClient.sql("""
+                        INSERT INTO study_cycle (id, owner_id, name, mode)
+                        VALUES (:id, :ownerId, :name, 'SUGGESTED')
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .param("name", name)
+                .update();
+    }
+
+    public void createSuggestionSubject(
+            UUID cycleId,
+            int inputPosition,
+            SuggestedStudyCycleSubject subject) {
+        jdbcClient.sql("""
+                        INSERT INTO study_cycle_suggestion_subject (
+                            cycle_id, subject_id, input_position, question_count, weight,
+                            difficulty, priority, allocated_minutes, appearance_count
+                        ) VALUES (
+                            :cycleId, :subjectId, :inputPosition, :questionCount, :weight,
+                            :difficulty, :priority, :allocatedMinutes, :appearanceCount
+                        )
+                        """)
+                .param("cycleId", cycleId)
+                .param("subjectId", subject.subjectId())
+                .param("inputPosition", inputPosition)
+                .param("questionCount", subject.questionCount())
+                .param("weight", subject.weight())
+                .param("difficulty", subject.difficulty().name())
+                .param("priority", subject.priority())
+                .param("allocatedMinutes", subject.allocatedMinutes())
+                .param("appearanceCount", subject.appearanceCount())
+                .update();
+    }
+
+    public List<SuggestedStudyCycleSubject> findSuggestionSubjects(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT input.subject_id, subject.name AS subject_name,
+                               input.question_count, input.weight, input.difficulty,
+                               input.priority, input.allocated_minutes, input.appearance_count
+                        FROM study_cycle_suggestion_subject input
+                        JOIN subject ON subject.id = input.subject_id
+                        WHERE input.cycle_id = :cycleId
+                        ORDER BY input.input_position
+                        """)
+                .param("cycleId", cycleId)
+                .query((resultSet, rowNumber) -> new SuggestedStudyCycleSubject(
+                        resultSet.getObject("subject_id", UUID.class),
+                        resultSet.getString("subject_name"),
+                        resultSet.getInt("question_count"),
+                        resultSet.getInt("weight"),
+                        StudyCycleDifficulty.valueOf(resultSet.getString("difficulty")),
+                        resultSet.getObject("priority", BigDecimal.class),
+                        resultSet.getInt("allocated_minutes"),
+                        resultSet.getInt("appearance_count")))
+                .list();
     }
 
     public Optional<StudyCycle> findByIdAndOwnerId(UUID id, UUID ownerId) {
@@ -70,12 +132,18 @@ public class StudyCycleRepository {
     public int update(UUID id, UUID ownerId, String name) {
         return jdbcClient.sql("""
                         UPDATE study_cycle
-                        SET name = :name, updated_at = CURRENT_TIMESTAMP
+                        SET name = :name, mode = 'CUSTOM', updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id AND owner_id = :ownerId
                         """)
                 .param("id", id)
                 .param("ownerId", ownerId)
                 .param("name", name)
+                .update();
+    }
+
+    public void deleteSuggestion(UUID cycleId) {
+        jdbcClient.sql("DELETE FROM study_cycle_suggestion_subject WHERE cycle_id = :cycleId")
+                .param("cycleId", cycleId)
                 .update();
     }
 

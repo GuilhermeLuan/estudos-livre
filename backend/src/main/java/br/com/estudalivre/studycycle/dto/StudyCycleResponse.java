@@ -15,6 +15,7 @@ public record StudyCycleResponse(
         int totalMinutes,
         boolean activatable,
         StudyCycleRunResponse currentRun,
+        StudyCycleSuggestionResponse suggestion,
         List<StudyCycleStageResponse> stages,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt) {
@@ -22,7 +23,8 @@ public record StudyCycleResponse(
     public static StudyCycleResponse from(
             StudyCycle cycle,
             List<StudyCycleStage> stages,
-            StudyCycleRun currentRun) {
+            StudyCycleRun currentRun,
+            StudyCycleSuggestionResponse suggestion) {
         List<StudyCycleStageResponse> stageResponses = stages.stream()
                 .map(stage -> new StudyCycleStageResponse(
                         stage.id(),
@@ -40,6 +42,7 @@ public record StudyCycleResponse(
                 stages.stream().mapToInt(StudyCycleStage::targetMinutes).sum(),
                 !stages.isEmpty(),
                 currentRun == null ? null : StudyCycleRunResponse.from(currentRun),
+                suggestion,
                 stageResponses,
                 cycle.createdAt(),
                 cycle.updatedAt());

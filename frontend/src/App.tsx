@@ -23,7 +23,16 @@ import {
   StudyContent,
   updateContent
 } from "./content-api";
-import { activateStudyCycle, createStudyCycle, CycleSwitchAction, listStudyCycles, StudyCycle, updateStudyCycle } from "./study-cycle-api";
+import {
+  activateStudyCycle,
+  createStudyCycle,
+  createSuggestedStudyCycle,
+  CycleSwitchAction,
+  listStudyCycles,
+  StudyCycle,
+  StudyCycleDifficulty,
+  updateStudyCycle
+} from "./study-cycle-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -134,10 +143,47 @@ function formatCycleMinutes(totalMinutes: number) {
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}min`;
 }
 
+function CycleSuggestionExplanation({ cycle }: { cycle: StudyCycle }) {
+  if (!cycle.suggestion) return null;
+  return (
+    <details className="cycle-explanation">
+      <summary>Entenda o cálculo</summary>
+      <div className="cycle-explanation-body">
+        <div className="cycle-formula-strip">
+          <span><strong>Duração</strong>{cycle.suggestion.durationRule}</span>
+          <span><strong>Prioridade</strong>{cycle.suggestion.priorityRule}</span>
+        </div>
+        <ul aria-label="Distribuição sugerida por matéria">
+          {cycle.suggestion.subjects.map((subject) => (
+            <li key={subject.subjectId}>
+              <div>
+                <strong>{subject.subjectName}</strong>
+                <span>{`Prioridade ${subject.priority}`}</span>
+                <small>{`${subject.questionCount} questões · peso ${subject.weight} · ${subject.appearanceCount} ${subject.appearanceCount === 1 ? "aparição" : "aparições"}`}</small>
+              </div>
+              <strong aria-label={`Carga de ${subject.subjectName}: ${formatCycleMinutes(subject.allocatedMinutes)}`}>
+                {formatCycleMinutes(subject.allocatedMinutes)}
+              </strong>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </details>
+  );
+}
+
 type EditableCycleStage = {
   key: string;
   subjectId: string;
   targetMinutes: number;
+};
+
+type SuggestedSubjectDraft = {
+  key: string;
+  subjectId: string;
+  questionCount: number;
+  weight: number;
+  difficulty: StudyCycleDifficulty;
 };
 
 function CycleSwitchDialog({ currentCycle, targetCycle, pending, error, onCancel, onChoose }: {
@@ -192,7 +238,11 @@ function CycleSwitchDialog({ currentCycle, targetCycle, pending, error, onCancel
 function ProtectedStudyCyclesPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showSuggestion, setShowSuggestion] = useState(false);
   const [cycleName, setCycleName] = useState("");
+  const [suggestionName, setSuggestionName] = useState("");
+  const [suggestedSubjects, setSuggestedSubjects] = useState<SuggestedSubjectDraft[]>([]);
+  const [suggestionInitialized, setSuggestionInitialized] = useState(false);
   const [selectedCycleId, setSelectedCycleId] = useState<string>();
   const [draftName, setDraftName] = useState("");
   const [draftStages, setDraftStages] = useState<EditableCycleStage[]>([]);
@@ -208,9 +258,21 @@ function ProtectedStudyCyclesPage() {
   const subjects = useQuery({
     queryKey: ["subjects", "active"],
     queryFn: () => listSubjects("active"),
-    enabled: auth.data?.state === "authenticated" && Boolean(selectedCycleId),
+    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion),
     staleTime: 30_000
   });
+
+  useEffect(() => {
+    if (!showSuggestion || suggestionInitialized || !subjects.data) return;
+    setSuggestedSubjects(subjects.data.slice(0, 30).map((subject) => ({
+      key: `suggestion-${subject.id}`,
+      subjectId: subject.id,
+      questionCount: 1,
+      weight: 1,
+      difficulty: "MEDIUM"
+    })));
+    setSuggestionInitialized(true);
+  }, [showSuggestion, suggestionInitialized, subjects.data]);
 
   function editCycle(cycle: StudyCycle) {
     setSelectedCycleId(cycle.id);
@@ -232,6 +294,24 @@ function ProtectedStudyCyclesPage() {
       setCycleName("");
       setShowCreate(false);
       editCycle(created);
+    }
+  });
+  const suggestionMutation = useMutation({
+    mutationFn: () => createSuggestedStudyCycle(
+      suggestionName,
+      suggestedSubjects.map(({ subjectId, questionCount, weight, difficulty }) => ({
+        subjectId,
+        questionCount,
+        weight,
+        difficulty
+      }))
+    ),
+    onSuccess: (created) => {
+      queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
+        [...current, created].sort((first, second) =>
+          first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
+      );
+      closeSuggestion();
     }
   });
   const updateMutation = useMutation({
@@ -272,6 +352,45 @@ function ProtectedStudyCyclesPage() {
   function submitCycle(event: FormEvent) {
     event.preventDefault();
     createMutation.mutate();
+  }
+
+  function openSuggestion() {
+    setShowCreate(false);
+    setSelectedCycleId(undefined);
+    setShowSuggestion(true);
+    setSuggestionInitialized(false);
+    suggestionMutation.reset();
+  }
+
+  function closeSuggestion() {
+    setShowSuggestion(false);
+    setSuggestionName("");
+    setSuggestedSubjects([]);
+    setSuggestionInitialized(false);
+  }
+
+  function submitSuggestion(event: FormEvent) {
+    event.preventDefault();
+    suggestionMutation.mutate();
+  }
+
+  function updateSuggestedSubject(index: number, patch: Partial<Omit<SuggestedSubjectDraft, "key">>) {
+    setSuggestedSubjects((current) => current.map((subject, subjectIndex) =>
+      subjectIndex === index ? { ...subject, ...patch } : subject
+    ));
+  }
+
+  function addSuggestedSubject() {
+    const usedIds = new Set(suggestedSubjects.map((subject) => subject.subjectId));
+    const available = subjects.data?.find((subject) => !usedIds.has(subject.id));
+    if (!available) return;
+    setSuggestedSubjects((current) => [...current, {
+      key: `suggestion-${available.id}`,
+      subjectId: available.id,
+      questionCount: 1,
+      weight: 1,
+      difficulty: "MEDIUM"
+    }]);
   }
 
   function submitCycleStages(event: FormEvent) {
@@ -337,6 +456,12 @@ function ProtectedStudyCyclesPage() {
   const otherCycles = cycles.data?.filter((cycle) => cycle.status !== "ACTIVE") ?? [];
   const selectedCycle = cycles.data?.find((cycle) => cycle.id === selectedCycleId);
   const activeCycleWouldBeEmpty = selectedCycle?.status === "ACTIVE" && draftStages.length === 0;
+  const suggestedTotalMinutes = Math.min(30 * 60, Math.max(10 * 60, suggestedSubjects.length * 2 * 60));
+  const suggestionIsValid = Boolean(
+    suggestionName.trim()
+    && suggestedSubjects.length > 0
+    && suggestedSubjects.every((subject) => subject.questionCount > 0 && subject.weight > 0)
+  );
 
   function requestCycleActivation(cycle: StudyCycle) {
     if (activeCycle && activeCycle.id !== cycle.id) {
@@ -361,10 +486,87 @@ function ProtectedStudyCyclesPage() {
           <div>
             <span className="eyebrow">Sua ordem de estudo</span>
             <h1>Ciclos de estudo</h1>
-            <p>Monte sequências flexíveis e distribua seu tempo entre as matérias.</p>
+            <p>Deixe o sistema distribuir seu tempo ou monte a sequência manualmente.</p>
           </div>
-          <button className="primary-button" type="button" onClick={() => setShowCreate(true)} disabled={showCreate}>Novo ciclo</button>
+          <div className="cycle-heading-actions">
+            <button className="secondary-button" type="button" onClick={() => { closeSuggestion(); setShowCreate(true); }} disabled={showCreate}>Novo ciclo</button>
+            <button className="primary-button" type="button" onClick={openSuggestion} disabled={showSuggestion}>Gerar ciclo sugerido</button>
+          </div>
         </div>
+        {showSuggestion && (
+          <section className="cycle-suggestion-composer" aria-labelledby="suggestion-title">
+            <header className="cycle-suggestion-header">
+              <div>
+                <span className="card-kicker">Planejamento explicado</span>
+                <h2 id="suggestion-title">Transforme o edital em um ciclo</h2>
+                <p>Informe a incidência, o peso e a dificuldade. O sistema preserva uma hora mínima por matéria e intercala as aparições.</p>
+              </div>
+              <div className="cycle-suggestion-total" aria-label={`Duração estimada: ${formatCycleMinutes(suggestedTotalMinutes)}`}>
+                <span>Duração estimada</span>
+                <strong>{formatCycleMinutes(suggestedTotalMinutes)}</strong>
+                <small>{suggestedSubjects.length} {suggestedSubjects.length === 1 ? "matéria" : "matérias"}</small>
+              </div>
+            </header>
+            <div className="cycle-formula-strip cycle-formula-preview" aria-label="Regras da sugestão">
+              <span><strong>Duração</strong>2h por matéria · mínimo 10h · máximo 30h</span>
+              <span><strong>Prioridade</strong>questões × peso × dificuldade</span>
+            </div>
+            <form className="cycle-suggestion-form" onSubmit={submitSuggestion}>
+              <label className="cycle-name-field">Nome da sugestão<input autoFocus required maxLength={120} value={suggestionName} onChange={(event) => setSuggestionName(event.target.value)} /></label>
+              {subjects.isPending && <p className="cycle-subject-state" aria-live="polite">Abrindo suas matérias…</p>}
+              {subjects.isError && <p className="form-error" role="alert">Não foi possível carregar as matérias ativas.</p>}
+              {subjects.data?.length === 0 && (
+                <p className="cycle-subject-state">Cadastre ao menos uma matéria ativa antes de gerar uma sugestão.</p>
+              )}
+              <div className="cycle-suggestion-inputs">
+                {suggestedSubjects.map((draft, index) => {
+                  const selectedSubject = subjects.data?.find((subject) => subject.id === draft.subjectId);
+                  const selectedName = selectedSubject?.name ?? `Matéria ${index + 1}`;
+                  return (
+                    <fieldset className="cycle-suggestion-subject" key={draft.key}>
+                      <legend>{String(index + 1).padStart(2, "0")} · {selectedName}</legend>
+                      <label>Matéria
+                        <select value={draft.subjectId} onChange={(event) => updateSuggestedSubject(index, { subjectId: event.target.value })}>
+                          {subjects.data?.map((subject) => (
+                            <option
+                              value={subject.id}
+                              key={subject.id}
+                              disabled={suggestedSubjects.some((item, itemIndex) => itemIndex !== index && item.subjectId === subject.id)}
+                            >
+                              {subject.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>Questões de {selectedName}
+                        <input type="number" min={1} required value={draft.questionCount} onChange={(event) => updateSuggestedSubject(index, { questionCount: Number(event.target.value) })} />
+                      </label>
+                      <label>Peso de {selectedName}
+                        <input type="number" min={1} required value={draft.weight} onChange={(event) => updateSuggestedSubject(index, { weight: Number(event.target.value) })} />
+                      </label>
+                      <label>Dificuldade de {selectedName}
+                        <select value={draft.difficulty} onChange={(event) => updateSuggestedSubject(index, { difficulty: event.target.value as StudyCycleDifficulty })}>
+                          <option value="EASY">Fácil · fator 1,00</option>
+                          <option value="MEDIUM">Média · fator 1,25</option>
+                          <option value="HARD">Difícil · fator 1,50</option>
+                        </select>
+                      </label>
+                      <button className="suggestion-remove-subject" type="button" aria-label={`Remover ${selectedName} da sugestão`} onClick={() => setSuggestedSubjects((current) => current.filter((_, subjectIndex) => subjectIndex !== index))}>Remover</button>
+                    </fieldset>
+                  );
+                })}
+              </div>
+              {subjects.data && suggestedSubjects.length < Math.min(subjects.data.length, 30) && (
+                <button className="cycle-add-stage" type="button" onClick={addSuggestedSubject}>+ Adicionar matéria</button>
+              )}
+              {suggestionMutation.isError && <p className="form-error" role="alert">{suggestionMutation.error instanceof ApiError ? suggestionMutation.error.message : "Não foi possível gerar o ciclo sugerido."}</p>}
+              <div className="cycle-editor-actions">
+                <button className="secondary-button" type="button" onClick={closeSuggestion}>Cancelar</button>
+                <button className="primary-button" type="submit" disabled={suggestionMutation.isPending || !suggestionIsValid}>{suggestionMutation.isPending ? "Calculando…" : "Gerar planejamento"}</button>
+              </div>
+            </form>
+          </section>
+        )}
         {showCreate && (
           <section className="subject-composer cycle-composer" aria-labelledby="new-cycle-title">
             <div>
@@ -431,6 +633,7 @@ function ProtectedStudyCyclesPage() {
                 </li>
               ))}
             </ol>
+            <CycleSuggestionExplanation cycle={activeCycle} />
           </section>
         )}
         {cycles.data && cycles.data.length > 0 && !activeCycle && (
@@ -450,11 +653,12 @@ function ProtectedStudyCyclesPage() {
               <article className="cycle-draft-card" key={cycle.id}>
                 <span className="cycle-card-mark" aria-hidden="true"><CyclesIcon /></span>
                 <div>
-                  <span className="card-kicker">{cycle.currentRun ? "Pausado" : cycle.status === "DRAFT" ? "Rascunho" : "Sem volta aberta"}</span>
+                  <span className="card-kicker">{cycle.mode === "SUGGESTED" ? "Sugestão explicada" : cycle.currentRun ? "Pausado" : cycle.status === "DRAFT" ? "Rascunho" : "Sem volta aberta"}</span>
                   <h2>{cycle.name}</h2>
                   <p>{cycle.currentRun ? `Volta ${cycle.currentRun.number} pausada · ${cycle.stages.length} ${cycle.stages.length === 1 ? "atividade" : "atividades"}` : `${cycle.stages.length} ${cycle.stages.length === 1 ? "atividade" : "atividades"}`}</p>
                 </div>
                 <strong className="cycle-total">{formatCycleMinutes(cycle.totalMinutes)}</strong>
+                <CycleSuggestionExplanation cycle={cycle} />
                 <div className="cycle-card-actions">
                   <button className="secondary-button" type="button" aria-label={`Editar ${cycle.name}`} onClick={() => editCycle(cycle)}>Editar</button>
                   <button

@@ -654,6 +654,83 @@ describe("authentication journey", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/study-cycles", expect.objectContaining({ method: "POST" }));
   });
 
+  it("generates a suggested cycle from subject inputs and explains the result", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-sugestao; Path=/";
+    const subjects = [
+      { id: "subject-portuguese", name: "Língua Portuguesa", archived: false },
+      { id: "subject-law", name: "Direito", archived: false }
+    ];
+    const suggestedCycle = {
+      id: "cycle-suggested",
+      name: "Reta final sugerida",
+      mode: "SUGGESTED",
+      status: "DRAFT",
+      totalMinutes: 600,
+      activatable: true,
+      currentRun: null,
+      suggestion: {
+        totalMinutes: 600,
+        durationRule: "2h por matéria, limitado entre 10h e 30h",
+        priorityRule: "questões × peso × dificuldade",
+        subjects: [
+          { subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", questionCount: 20, weight: 2, difficulty: "EASY", priority: 40, allocatedMinutes: 320, appearanceCount: 2 },
+          { subjectId: "subject-law", subjectName: "Direito", questionCount: 10, weight: 1, difficulty: "HARD", priority: 15, allocatedMinutes: 280, appearanceCount: 2 }
+        ]
+      },
+      stages: [
+        { id: "stage-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 160, longBlockWarning: false },
+        { id: "stage-2", position: 2, subjectId: "subject-law", subjectName: "Direito", targetMinutes: 140, longBlockWarning: false },
+        { id: "stage-3", position: 3, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 160, longBlockWarning: false },
+        { id: "stage-4", position: 4, subjectId: "subject-law", subjectName: "Direito", targetMinutes: 140, longBlockWarning: false }
+      ],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse(subjects);
+      if (url === "/api/study-cycles/suggestions" && init?.method === "POST") return jsonResponse(suggestedCycle, 201);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Gerar ciclo sugerido" }));
+    fireEvent.change(await screen.findByLabelText("Nome da sugestão"), { target: { value: "Reta final sugerida" } });
+    fireEvent.change(screen.getByLabelText("Questões de Língua Portuguesa"), { target: { value: "20" } });
+    fireEvent.change(screen.getByLabelText("Peso de Língua Portuguesa"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Dificuldade de Língua Portuguesa"), { target: { value: "EASY" } });
+    fireEvent.change(screen.getByLabelText("Questões de Direito"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Peso de Direito"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Dificuldade de Direito"), { target: { value: "HARD" } });
+    fireEvent.click(screen.getByRole("button", { name: "Gerar planejamento" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-cycles/suggestions",
+      expect.objectContaining({ method: "POST" })
+    ));
+    const suggestionCall = fetchMock.mock.calls.find(([url, init]) =>
+      url === "/api/study-cycles/suggestions" && init?.method === "POST"
+    );
+    expect(JSON.parse(String(suggestionCall?.[1]?.body))).toEqual({
+      name: "Reta final sugerida",
+      subjects: [
+        { subjectId: "subject-portuguese", questionCount: 20, weight: 2, difficulty: "EASY" },
+        { subjectId: "subject-law", questionCount: 10, weight: 1, difficulty: "HARD" }
+      ]
+    });
+
+    expect(await screen.findByText("Reta final sugerida")).toBeVisible();
+    fireEvent.click(screen.getByText("Entenda o cálculo"));
+    expect(screen.getByText("2h por matéria, limitado entre 10h e 30h")).toBeVisible();
+    expect(screen.getByText("Prioridade 40")).toBeVisible();
+    expect(screen.getByLabelText("Carga de Língua Portuguesa: 5h 20min")).toBeVisible();
+  });
+
   it("adds removes reorders and saves custom cycle stages with a long-block warning", async () => {
     window.history.pushState({}, "", "/ciclos");
     document.cookie = "XSRF-TOKEN=token-etapas; Path=/";

@@ -3,6 +3,7 @@ package br.com.estudalivre.studycycle.controller;
 import br.com.estudalivre.identity.service.IdentityPrincipal;
 import br.com.estudalivre.studycycle.dto.ActivateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CreateStudyCycleRequest;
+import br.com.estudalivre.studycycle.dto.CreateSuggestedStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
 import br.com.estudalivre.studycycle.service.StudyCycleService;
@@ -35,6 +36,14 @@ public class StudyCycleController {
             @AuthenticationPrincipal IdentityPrincipal principal,
             @Valid @RequestBody CreateStudyCycleRequest request) {
         StudyCycleResponse cycle = studyCycleService.create(principal.id(), request);
+        return ResponseEntity.created(URI.create("/api/study-cycles/" + cycle.id())).body(cycle);
+    }
+
+    @PostMapping("/suggestions")
+    public ResponseEntity<StudyCycleResponse> createSuggested(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @Valid @RequestBody CreateSuggestedStudyCycleRequest request) {
+        StudyCycleResponse cycle = studyCycleService.createSuggested(principal.id(), request);
         return ResponseEntity.created(URI.create("/api/study-cycles/" + cycle.id())).body(cycle);
     }
 

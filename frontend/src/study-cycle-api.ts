@@ -22,6 +22,21 @@ export type StudyCycle = {
     status: "IN_PROGRESS" | "PAUSED";
     startedAt: string;
   } | null;
+  suggestion?: {
+    totalMinutes: number;
+    durationRule: string;
+    priorityRule: string;
+    subjects: Array<{
+      subjectId: string;
+      subjectName: string;
+      questionCount: number;
+      weight: number;
+      difficulty: StudyCycleDifficulty;
+      priority: number;
+      allocatedMinutes: number;
+      appearanceCount: number;
+    }>;
+  } | null;
   stages: StudyCycleStage[];
   createdAt: string;
   updatedAt: string;
@@ -33,6 +48,14 @@ export type StudyCycleStageInput = {
 };
 
 export type CycleSwitchAction = "PAUSE" | "ABANDON";
+export type StudyCycleDifficulty = "EASY" | "MEDIUM" | "HARD";
+
+export type SuggestedStudyCycleSubjectInput = {
+  subjectId: string;
+  questionCount: number;
+  weight: number;
+  difficulty: StudyCycleDifficulty;
+};
 
 export async function listStudyCycles(): Promise<StudyCycle[]> {
   const response = await apiFetch("/api/study-cycles");
@@ -47,6 +70,19 @@ export async function createStudyCycle(name: string): Promise<StudyCycle> {
     body: JSON.stringify({ name })
   });
   await requireSuccess(response, "Não foi possível criar o ciclo.");
+  return response.json() as Promise<StudyCycle>;
+}
+
+export async function createSuggestedStudyCycle(
+  name: string,
+  subjects: SuggestedStudyCycleSubjectInput[]
+): Promise<StudyCycle> {
+  const response = await apiFetch("/api/study-cycles/suggestions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, subjects })
+  });
+  await requireSuccess(response, "Não foi possível gerar o ciclo sugerido.");
   return response.json() as Promise<StudyCycle>;
 }
 

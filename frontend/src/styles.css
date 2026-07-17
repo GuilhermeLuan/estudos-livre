@@ -586,6 +586,93 @@ a.danger-button {
 
 .cycle-content { max-width: 1040px; }
 .cycle-composer { border-top: 3px solid var(--marker); }
+.cycle-heading-actions { display: flex; align-items: center; gap: 8px; }
+.cycle-heading-actions .primary-button,
+.cycle-heading-actions .secondary-button { min-height: 46px; margin: 0; white-space: nowrap; }
+
+.cycle-suggestion-composer {
+  overflow: hidden;
+  margin-bottom: 28px;
+  border-top: 4px solid var(--marker);
+  border-radius: var(--radius-panel);
+  background: var(--paper-raised);
+  box-shadow: var(--lift-medium);
+  animation: settle-in 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.cycle-suggestion-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+}
+
+.cycle-suggestion-header h2 { margin: 5px 0 7px; font: 700 28px/1.05 var(--font-display); letter-spacing: -0.035em; text-wrap: balance; }
+.cycle-suggestion-header p { max-width: 620px; margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.55; text-wrap: pretty; }
+.cycle-suggestion-total { min-width: 152px; padding: 16px; border-left: 3px solid var(--marker); background: var(--marker-soft); }
+.cycle-suggestion-total span,
+.cycle-suggestion-total small { display: block; color: var(--ink-soft); font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.cycle-suggestion-total strong { display: block; margin: 6px 0 5px; font: 700 28px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.cycle-suggestion-total small { color: color-mix(in srgb, var(--marker) 62%, var(--ink)); letter-spacing: 0; text-transform: none; }
+
+.cycle-formula-strip { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--line-soft); }
+.cycle-formula-strip span { display: grid; gap: 3px; padding: 12px 16px; background: var(--paper-inset); color: var(--ink-soft); font-size: 11px; }
+.cycle-formula-strip strong { color: var(--binder); font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; }
+.cycle-formula-preview { margin-inline: 24px; }
+.cycle-suggestion-form { display: grid; gap: 16px; padding: 24px; }
+.cycle-suggestion-inputs { display: grid; gap: 8px; }
+
+.cycle-suggestion-subject {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) repeat(3, minmax(120px, 0.7fr)) auto;
+  align-items: end;
+  gap: 12px;
+  margin: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line-soft);
+  background: var(--paper);
+}
+
+.cycle-suggestion-subject legend { padding: 0 7px; color: var(--marker); font: 700 12px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.cycle-suggestion-subject label { min-width: 0; display: grid; gap: 6px; color: var(--ink); font-size: 11px; font-weight: 700; }
+.cycle-suggestion-subject input,
+.cycle-suggestion-subject select {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  outline: 0;
+  background: var(--paper-inset);
+  color: var(--ink);
+  font: 14px/1.2 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+.cycle-suggestion-subject input:hover,
+.cycle-suggestion-subject select:hover { border-color: color-mix(in srgb, var(--binder) 35%, var(--line)); }
+.cycle-suggestion-subject input:focus,
+.cycle-suggestion-subject select:focus { border-color: var(--binder); background: var(--paper-raised); box-shadow: 0 0 0 3px color-mix(in srgb, var(--binder) 16%, transparent); }
+.suggestion-remove-subject { min-height: 44px; padding: 9px 10px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--late); font: 700 11px/1 var(--font-ui); cursor: pointer; }
+.suggestion-remove-subject:hover { background: var(--late-soft); }
+.suggestion-remove-subject:focus-visible { outline: 3px solid color-mix(in srgb, var(--late) 30%, transparent); outline-offset: 2px; }
+
+.cycle-explanation { grid-column: 1 / -1; border-top: 1px solid var(--line-soft); }
+.cycle-explanation summary { min-height: 44px; display: flex; align-items: center; padding: 10px 16px; color: var(--binder); font-size: 11px; font-weight: 700; cursor: pointer; list-style-position: inside; }
+.cycle-explanation summary:hover { background: color-mix(in srgb, var(--marker-soft) 32%, transparent); }
+.cycle-explanation summary:focus-visible { outline: 3px solid color-mix(in srgb, var(--binder) 30%, transparent); outline-offset: -3px; }
+.cycle-explanation-body { display: grid; gap: 12px; padding: 0 16px 16px; }
+.cycle-explanation-body > .cycle-formula-strip { border: 1px solid var(--line-soft); }
+.cycle-explanation-body ul { overflow: hidden; margin: 0; padding: 0; border: 1px solid var(--line-soft); background: var(--paper-raised); list-style: none; }
+.cycle-explanation-body li { min-height: 64px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+.cycle-explanation-body li:last-child { border-bottom: 0; }
+.cycle-explanation-body li div { min-width: 0; display: grid; gap: 3px; }
+.cycle-explanation-body li div > strong { font-size: 13px; }
+.cycle-explanation-body li span { color: var(--ink-faint); font-size: 10px; }
+.cycle-explanation-body li small { color: var(--ink-faint); font-size: 10px; }
+.cycle-explanation-body li > strong { color: var(--binder); font: 700 17px/1 var(--font-display); font-variant-numeric: tabular-nums; }
 
 .cycle-active-card {
   position: relative;
@@ -1080,6 +1167,12 @@ a.danger-button {
   .error-card { grid-template-columns: auto minmax(0, 1fr); padding: 20px; }
   .retry-button { grid-column: 1 / -1; width: 100%; }
   .subjects-heading { align-items: end; }
+  .cycle-heading-actions { align-self: end; }
+  .cycle-suggestion-header { padding: 20px; }
+  .cycle-formula-preview { margin-inline: 20px; }
+  .cycle-suggestion-form { padding: 20px; }
+  .cycle-suggestion-subject { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .suggestion-remove-subject { justify-self: start; }
   .subject-composer { grid-template-columns: 1fr; gap: 20px; padding: 20px; }
   .subjects-error { grid-template-columns: auto minmax(0, 1fr); }
   .subjects-error .secondary-button { grid-column: 1 / -1; width: 100%; }
@@ -1110,6 +1203,14 @@ a.danger-button {
   .compact-button { width: 100%; }
   .credential-section { padding: 20px; }
   .subjects-heading .primary-button { width: 100%; }
+  .cycle-heading-actions { width: 100%; display: grid; grid-template-columns: 1fr; }
+  .cycle-heading-actions .secondary-button { width: 100%; }
+  .cycle-suggestion-header { grid-template-columns: 1fr; }
+  .cycle-suggestion-total { width: 100%; }
+  .cycle-formula-strip { grid-template-columns: 1fr; }
+  .cycle-suggestion-subject { grid-template-columns: 1fr; }
+  .suggestion-remove-subject { width: 100%; }
+  .cycle-explanation-body li { align-items: start; }
   .catalog-tabs { width: 100%; }
   .catalog-tabs button { flex: 1; }
   .subject-row { grid-template-columns: 36px minmax(0, 1fr); gap: 12px; padding: 16px; }
