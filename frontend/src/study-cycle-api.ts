@@ -19,7 +19,7 @@ export type StudyCycle = {
   currentRun: {
     id: string;
     number: number;
-    currentStagePosition: number;
+    status: "IN_PROGRESS" | "PAUSED";
     startedAt: string;
   } | null;
   stages: StudyCycleStage[];
@@ -31,6 +31,8 @@ export type StudyCycleStageInput = {
   subjectId: string;
   targetMinutes: number;
 };
+
+export type CycleSwitchAction = "PAUSE" | "ABANDON";
 
 export async function listStudyCycles(): Promise<StudyCycle[]> {
   const response = await apiFetch("/api/study-cycles");
@@ -62,9 +64,13 @@ export async function updateStudyCycle(
   return response.json() as Promise<StudyCycle>;
 }
 
-export async function activateStudyCycle(id: string): Promise<StudyCycle> {
+export async function activateStudyCycle(id: string, currentRunAction?: CycleSwitchAction): Promise<StudyCycle> {
   const response = await apiFetch(`/api/study-cycles/${id}/activate`, {
-    method: "POST"
+    method: "POST",
+    ...(currentRunAction ? {
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentRunAction })
+    } : {})
   });
   await requireSuccess(response, "Não foi possível ativar o ciclo.");
   return response.json() as Promise<StudyCycle>;

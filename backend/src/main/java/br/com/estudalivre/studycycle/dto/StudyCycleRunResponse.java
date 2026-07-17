@@ -7,14 +7,14 @@ import java.util.UUID;
 public record StudyCycleRunResponse(
         UUID id,
         int number,
-        int currentStagePosition,
+        String status,
         OffsetDateTime startedAt) {
 
     public static StudyCycleRunResponse from(StudyCycleRun run) {
         return new StudyCycleRunResponse(
                 run.id(),
                 run.number(),
-                run.currentStagePosition(),
+                run.status(),
                 run.startedAt());
     }
 }

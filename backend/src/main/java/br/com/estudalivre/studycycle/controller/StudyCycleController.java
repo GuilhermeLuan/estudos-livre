@@ -1,6 +1,7 @@
 package br.com.estudalivre.studycycle.controller;
 
 import br.com.estudalivre.identity.service.IdentityPrincipal;
+import br.com.estudalivre.studycycle.dto.ActivateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CreateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
@@ -60,7 +61,11 @@ public class StudyCycleController {
     @PostMapping("/{id}/activate")
     public StudyCycleResponse activate(
             @AuthenticationPrincipal IdentityPrincipal principal,
-            @PathVariable UUID id) {
-        return studyCycleService.activate(principal.id(), id);
+            @PathVariable UUID id,
+            @RequestBody(required = false) ActivateStudyCycleRequest request) {
+        return studyCycleService.activate(
+                principal.id(),
+                id,
+                request == null ? null : request.currentRunAction());
     }
 }

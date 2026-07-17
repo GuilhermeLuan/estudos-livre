@@ -108,6 +108,53 @@ class CustomStudyCycleIntegrationTest {
     }
 
     @Test
+    void ownerEditsTheActiveCycleAndKeepsItActive() throws Exception {
+        IdentityPrincipal principal = createUser("pessoa@example.com");
+        UUID subjectId = createSubject(principal, "Matemática");
+        UUID cycleId = createCycle(principal, "Ciclo inicial");
+
+        updateCycle(principal, cycleId, "Ciclo inicial", subjectId, 60)
+                .andExpect(status().isOk());
+        mockMvc.perform(withSpaCsrf(post("/api/study-cycles/{id}/activate", cycleId)
+                        .with(user(principal))))
+                .andExpect(status().isOk());
+
+        updateCycle(principal, cycleId, "Ciclo ajustado", subjectId, 90)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Ciclo ajustado"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.totalMinutes").value(90))
+                .andExpect(jsonPath("$.stages[0].targetMinutes").value(90));
+    }
+
+    @Test
+    void activeCycleCannotBeSavedWithoutActivities() throws Exception {
+        IdentityPrincipal principal = createUser("pessoa@example.com");
+        UUID subjectId = createSubject(principal, "Matemática");
+        UUID cycleId = createCycle(principal, "Ciclo ativo");
+
+        updateCycle(principal, cycleId, "Ciclo ativo", subjectId, 60)
+                .andExpect(status().isOk());
+        mockMvc.perform(withSpaCsrf(post("/api/study-cycles/{id}/activate", cycleId)
+                        .with(user(principal))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}", cycleId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Ciclo ativo","stages":[]}
+                                """)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Ciclo ativo precisa de atividades"));
+
+        mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.stages.length()").value(1));
+    }
+
+    @Test
     void stageDurationMustBePositiveAndDivisibleByFiveWhileLongBlocksOnlyWarn() throws Exception {
         IdentityPrincipal principal = createUser("pessoa@example.com");
         UUID subjectId = createSubject(principal, "Direito Constitucional");
@@ -259,6 +306,23 @@ class CustomStudyCycleIntegrationTest {
                 .getResponse()
                 .getContentAsString();
         return UUID.fromString(JsonPath.read(body, "$.id"));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions updateCycle(
+            IdentityPrincipal principal,
+            UUID cycleId,
+            String name,
+            UUID subjectId,
+            int targetMinutes) throws Exception {
+        return mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}", cycleId)
+                .with(user(principal))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {
+                          "name":"%s",
+                          "stages":[{"subjectId":"%s","targetMinutes":%d}]
+                        }
+                        """.formatted(name, subjectId, targetMinutes))));
     }
 
     private MockHttpServletRequestBuilder withSpaCsrf(MockHttpServletRequestBuilder request) throws Exception {

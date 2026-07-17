@@ -7,6 +7,6 @@ public record StudyCycleRun(
         UUID id,
         UUID cycleId,
         int number,
-        int currentStagePosition,
+        String status,
         OffsetDateTime startedAt) {
 }

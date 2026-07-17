@@ -56,11 +56,22 @@ public class StudyCycleRepository {
                 .list();
     }
 
-    public int updateDraft(UUID id, UUID ownerId, String name) {
+    public Optional<StudyCycle> findActiveByOwnerId(UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT id, owner_id, name, mode, status, created_at, updated_at
+                        FROM study_cycle
+                        WHERE owner_id = :ownerId AND status = 'ACTIVE'
+                        """)
+                .param("ownerId", ownerId)
+                .query(StudyCycleRepository::mapCycle)
+                .optional();
+    }
+
+    public int update(UUID id, UUID ownerId, String name) {
         return jdbcClient.sql("""
                         UPDATE study_cycle
                         SET name = :name, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :id AND owner_id = :ownerId AND status = 'DRAFT'
+                        WHERE id = :id AND owner_id = :ownerId
                         """)
                 .param("id", id)
                 .param("ownerId", ownerId)
@@ -142,10 +153,43 @@ public class StudyCycleRepository {
                 .update();
     }
 
+    public void pauseCurrentRun(UUID cycleId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run
+                        SET status = 'PAUSED', updated_at = CURRENT_TIMESTAMP
+                        WHERE cycle_id = :cycleId AND status = 'IN_PROGRESS'
+                        """)
+                .param("cycleId", cycleId)
+                .update();
+    }
+
+    public void resumeCurrentRun(UUID cycleId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run
+                        SET status = 'IN_PROGRESS', updated_at = CURRENT_TIMESTAMP
+                        WHERE cycle_id = :cycleId AND status = 'PAUSED'
+                        """)
+                .param("cycleId", cycleId)
+                .update();
+    }
+
+    public void abandonCurrentRun(UUID cycleId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run
+                        SET status = 'ABANDONED', ended_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE cycle_id = :cycleId AND status = 'IN_PROGRESS'
+                        """)
+                .param("cycleId", cycleId)
+                .update();
+    }
+
     public void createRun(UUID id, UUID cycleId) {
         jdbcClient.sql("""
-                        INSERT INTO study_cycle_run (id, cycle_id, run_number, current_stage_position)
-                        VALUES (:id, :cycleId, 1, 1)
+                        INSERT INTO study_cycle_run (id, cycle_id, run_number)
+                        SELECT :id, :cycleId, COALESCE(MAX(run_number), 0) + 1
+                        FROM study_cycle_run
+                        WHERE cycle_id = :cycleId
                         """)
                 .param("id", id)
                 .param("cycleId", cycleId)
@@ -154,9 +198,10 @@ public class StudyCycleRepository {
 
     public Optional<StudyCycleRun> findCurrentRun(UUID cycleId) {
         return jdbcClient.sql("""
-                        SELECT id, cycle_id, run_number, current_stage_position, started_at
+                        SELECT id, cycle_id, run_number, status, started_at
                         FROM study_cycle_run
-                        WHERE cycle_id = :cycleId AND completed_at IS NULL
+                        WHERE cycle_id = :cycleId
+                          AND status IN ('IN_PROGRESS', 'PAUSED')
                         ORDER BY run_number DESC
                         LIMIT 1
                         """)
@@ -191,7 +236,7 @@ public class StudyCycleRepository {
                 resultSet.getObject("id", UUID.class),
                 resultSet.getObject("cycle_id", UUID.class),
                 resultSet.getInt("run_number"),
-                resultSet.getInt("current_stage_position"),
+                resultSet.getString("status"),
                 resultSet.getObject("started_at", OffsetDateTime.class));
     }
 }
