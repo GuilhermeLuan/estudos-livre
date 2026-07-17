@@ -29,10 +29,19 @@ import {
   createSuggestedStudyCycle,
   CycleSwitchAction,
   listStudyCycles,
+  regenerateStudyCycleSuggestion,
   StudyCycle,
   StudyCycleDifficulty,
   updateStudyCycle
 } from "./study-cycle-api";
+import {
+  loadCurrentStudySession,
+  pauseStudySession,
+  resumeStudySession,
+  startStudySession,
+  StudySession,
+  StartStudySessionInput
+} from "./study-session-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -235,6 +244,287 @@ function CycleSwitchDialog({ currentCycle, targetCycle, pending, error, onCancel
   );
 }
 
+function RegenerationDialog({ cycle, subjects, pending, error, onCancel, onConfirm }: {
+  cycle: StudyCycle;
+  subjects: Subject[];
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: (name: string, subjects: SuggestedSubjectDraft[]) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [name, setName] = useState(cycle.name);
+  const [reviewing, setReviewing] = useState(false);
+  const [drafts, setDrafts] = useState<SuggestedSubjectDraft[]>(() => {
+    const suggestionBySubject = new Map(cycle.suggestion?.subjects.map((subject) => [subject.subjectId, subject]));
+    const subjectIds = cycle.suggestion?.subjects.map((subject) => subject.subjectId)
+      ?? Array.from(new Set(cycle.stages.map((stage) => stage.subjectId)));
+    return subjectIds.map((subjectId, index) => {
+      const previous = suggestionBySubject.get(subjectId);
+      return {
+        key: `regeneration-${subjectId}-${index}`,
+        subjectId,
+        questionCount: previous?.questionCount ?? 1,
+        weight: previous?.weight ?? 1,
+        difficulty: previous?.difficulty ?? "MEDIUM"
+      };
+    });
+  });
+  const estimatedMinutes = Math.min(30 * 60, Math.max(10 * 60, drafts.length * 2 * 60));
+  const valid = Boolean(name.trim() && drafts.length > 0 && drafts.every((draft) => draft.questionCount > 0 && draft.weight > 0));
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  function updateDraft(index: number, patch: Partial<Omit<SuggestedSubjectDraft, "key">>) {
+    setDrafts((current) => current.map((draft, draftIndex) => draftIndex === index ? { ...draft, ...patch } : draft));
+  }
+
+  function addSubject() {
+    const used = new Set(drafts.map((draft) => draft.subjectId));
+    const available = subjects.find((subject) => !used.has(subject.id));
+    if (!available) return;
+    setDrafts((current) => [...current, {
+      key: `regeneration-${available.id}-${current.length}`,
+      subjectId: available.id,
+      questionCount: 1,
+      weight: 1,
+      difficulty: "MEDIUM"
+    }]);
+  }
+
+  return (
+    <dialog className="regeneration-dialog" ref={dialogRef} aria-labelledby="regeneration-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <div className="regeneration-panel">
+        <header className="regeneration-dialog-head">
+          <span className="regeneration-bookmark" aria-hidden="true"><CyclesIcon /></span>
+          <div>
+            <span className="card-kicker">Substituição consciente</span>
+            <h2 id="regeneration-title">{reviewing ? "Confirmar nova sugestão" : "Preparar nova sugestão"}</h2>
+            <p>As atividades atuais só serão substituídas depois da sua confirmação.</p>
+          </div>
+        </header>
+        <div className="regeneration-impact" aria-label="Impacto da regeneração">
+          <article aria-label={`Planejamento atual: ${formatCycleMinutes(cycle.totalMinutes)}`}>
+            <span>Planejamento atual</span>
+            <strong>{formatCycleMinutes(cycle.totalMinutes)}</strong>
+            <small>{cycle.stages.length} {cycle.stages.length === 1 ? "atividade" : "atividades"}</small>
+          </article>
+          <span className="regeneration-arrow" aria-hidden="true">→</span>
+          <article className="regeneration-new" aria-label={`Nova sugestão estimada: ${formatCycleMinutes(estimatedMinutes)}`}>
+            <span>Nova sugestão estimada</span>
+            <strong>{formatCycleMinutes(estimatedMinutes)}</strong>
+            <small>{drafts.length} {drafts.length === 1 ? "matéria" : "matérias"}</small>
+          </article>
+        </div>
+        {!reviewing ? (
+          <form className="regeneration-form" onSubmit={(event) => { event.preventDefault(); setReviewing(true); }}>
+            <label className="cycle-name-field">Nome da nova sugestão<input required maxLength={120} value={name} onChange={(event) => setName(event.target.value)} /></label>
+            <div className="regeneration-inputs">
+              {drafts.map((draft, index) => {
+                const selected = subjects.find((subject) => subject.id === draft.subjectId);
+                const subjectName = selected?.name ?? cycle.stages.find((stage) => stage.subjectId === draft.subjectId)?.subjectName ?? `Matéria ${index + 1}`;
+                return (
+                  <fieldset className="regeneration-subject" key={draft.key}>
+                    <legend>{String(index + 1).padStart(2, "0")} · {subjectName}</legend>
+                    <label>Matéria
+                      <select value={draft.subjectId} onChange={(event) => updateDraft(index, { subjectId: event.target.value })}>
+                        {subjects.map((subject) => <option key={subject.id} value={subject.id} disabled={drafts.some((item, itemIndex) => itemIndex !== index && item.subjectId === subject.id)}>{subject.name}</option>)}
+                      </select>
+                    </label>
+                    <label>Questões de {subjectName}<input required type="number" min={1} value={draft.questionCount} onChange={(event) => updateDraft(index, { questionCount: Number(event.target.value) })} /></label>
+                    <label>Peso de {subjectName}<input required type="number" min={1} value={draft.weight} onChange={(event) => updateDraft(index, { weight: Number(event.target.value) })} /></label>
+                    <label>Dificuldade de {subjectName}
+                      <select value={draft.difficulty} onChange={(event) => updateDraft(index, { difficulty: event.target.value as StudyCycleDifficulty })}>
+                        <option value="EASY">Fácil · fator 1,00</option>
+                        <option value="MEDIUM">Média · fator 1,25</option>
+                        <option value="HARD">Difícil · fator 1,50</option>
+                      </select>
+                    </label>
+                    <button className="suggestion-remove-subject" type="button" aria-label={`Remover ${subjectName} da nova sugestão`} onClick={() => setDrafts((current) => current.filter((_, draftIndex) => draftIndex !== index))}>Remover</button>
+                  </fieldset>
+                );
+              })}
+            </div>
+            {drafts.length < subjects.length && <button className="cycle-add-stage" type="button" onClick={addSubject}>+ Adicionar matéria</button>}
+            <footer className="regeneration-actions">
+              <button className="secondary-button" type="button" onClick={onCancel}>Cancelar</button>
+              <button className="primary-button" type="submit" disabled={!valid}>Revisar substituição</button>
+            </footer>
+          </form>
+        ) : (
+          <div className="regeneration-confirmation">
+            <p>Seu planejamento personalizado de {formatCycleMinutes(cycle.totalMinutes)} será substituído por uma sugestão estimada de {formatCycleMinutes(estimatedMinutes)}.</p>
+            <p className="regeneration-confirmation-note">Depois da confirmação, as atividades serão recalculadas e o ciclo voltará ao modo sugerido.</p>
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <footer className="regeneration-actions">
+              <button className="secondary-button" type="button" onClick={() => setReviewing(false)} disabled={pending}>Voltar</button>
+              <button className="danger-button" type="button" autoFocus onClick={() => onConfirm(name, drafts)} disabled={pending}>{pending ? "Regenerando…" : "Confirmar regeneração"}</button>
+            </footer>
+          </div>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
+function formatTimer(totalSeconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function useLiveSessionSeconds(session: StudySession | null | undefined) {
+  const [seconds, setSeconds] = useState(session?.measuredSeconds ?? 0);
+
+  useEffect(() => {
+    if (!session) {
+      setSeconds(0);
+      return;
+    }
+    setSeconds(session.measuredSeconds);
+    if (session.status !== "ACTIVE") return;
+    const receivedAt = performance.now();
+    const timer = window.setInterval(() => {
+      setSeconds(session.measuredSeconds + Math.floor((performance.now() - receivedAt) / 1000));
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [session]);
+
+  return seconds;
+}
+
+function StudySessionDesk({ session, seconds, pending, error, onPause, onResume }: {
+  session: StudySession;
+  seconds: number;
+  pending: boolean;
+  error?: string;
+  onPause: () => void;
+  onResume: () => void;
+}) {
+  return (
+    <section
+      className={`study-session-desk ${session.status === "PAUSED" ? "is-paused" : ""}`}
+      aria-label={session.status === "ACTIVE" ? "Cronômetro em andamento" : "Cronômetro pausado"}
+    >
+      <span className="study-session-mark" aria-hidden="true">{session.status === "ACTIVE" ? "▶" : "Ⅱ"}</span>
+      <div className="study-session-copy">
+        <span className="card-kicker">{session.origin === "CYCLE" ? `Etapa ${String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}` : "Sessão livre"}</span>
+        <h2>{session.subject.name}</h2>
+        <p>{session.content?.name ?? "Sem conteúdo específico"}</p>
+      </div>
+      <div className="study-session-time">
+        <span>{session.status === "ACTIVE" ? "Tempo líquido" : "Pausado"}</span>
+        <strong>{formatTimer(seconds)}</strong>
+      </div>
+      <button
+        className={session.status === "ACTIVE" ? "secondary-button" : "primary-button"}
+        type="button"
+        onClick={session.status === "ACTIVE" ? onPause : onResume}
+        disabled={pending}
+      >
+        {pending ? "Sincronizando…" : session.status === "ACTIVE" ? "Pausar" : "Retomar"}
+      </button>
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function StartStudySessionDialog({
+  origin,
+  cycle,
+  stage,
+  subjects,
+  contents,
+  selectedSubjectId,
+  selectedContentId,
+  loadingSubjects,
+  loadingContents,
+  pending,
+  error,
+  onSubjectChange,
+  onContentChange,
+  onCancel,
+  onSubmit
+}: {
+  origin: "CYCLE" | "FREE";
+  cycle?: StudyCycle;
+  stage?: StudyCycle["stages"][number];
+  subjects: Subject[];
+  contents: StudyContent[];
+  selectedSubjectId: string;
+  selectedContentId: string;
+  loadingSubjects: boolean;
+  loadingContents: boolean;
+  pending: boolean;
+  error?: string;
+  onSubjectChange: (subjectId: string) => void;
+  onContentChange: (contentId: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const title = origin === "CYCLE" ? "Iniciar etapa atual" : "Iniciar sessão livre";
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog" ref={dialogRef} aria-labelledby="study-session-dialog-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+        <header>
+          <span className="study-session-dialog-mark" aria-hidden="true">▶</span>
+          <div>
+            <span className="card-kicker">{origin === "CYCLE" ? `${cycle?.name} · volta ${cycle?.currentRun?.number}` : "Estudo fora da ordem"}</span>
+            <h2 id="study-session-dialog-title">{title}</h2>
+            <p>{origin === "CYCLE" ? "A matéria vem da etapa atual; detalhe o conteúdo somente se for útil." : "Escolha a matéria. O conteúdo continua opcional."}</p>
+          </div>
+        </header>
+        <div className="study-session-fields">
+          {origin === "CYCLE" ? (
+            <div className="study-session-fixed-subject"><span>Matéria</span><strong>{stage?.subjectName}</strong><small>Meta {formatCycleMinutes(stage?.targetMinutes ?? 0)}</small></div>
+          ) : (
+            <label>Matéria
+              <select value={selectedSubjectId} onChange={(event) => onSubjectChange(event.target.value)} disabled={loadingSubjects} required>
+                {loadingSubjects && <option value="">Carregando matérias…</option>}
+                {!loadingSubjects && subjects.length === 0 && <option value="">Nenhuma matéria ativa</option>}
+                {subjects.map((subject) => <option value={subject.id} key={subject.id}>{subject.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label>Conteúdo (opcional)
+            <select value={selectedContentId} onChange={(event) => onContentChange(event.target.value)} disabled={!selectedSubjectId || loadingContents}>
+              <option value="">Sem conteúdo específico</option>
+              {contents.map((content) => <option value={content.id} key={content.id}>{content.name}</option>)}
+            </select>
+          </label>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Cancelar</button>
+          <button className="primary-button" type="submit" disabled={pending || !selectedSubjectId}>{pending ? "Iniciando…" : "Iniciar cronômetro"}</button>
+        </footer>
+      </form>
+    </dialog>
+  );
+}
+
 function ProtectedStudyCyclesPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
@@ -248,6 +538,11 @@ function ProtectedStudyCyclesPage() {
   const [draftStages, setDraftStages] = useState<EditableCycleStage[]>([]);
   const [nextStageKey, setNextStageKey] = useState(1);
   const [pendingCycle, setPendingCycle] = useState<StudyCycle>();
+  const [regenerationCycle, setRegenerationCycle] = useState<StudyCycle>();
+  const [savedAsCustomized, setSavedAsCustomized] = useState(false);
+  const [sessionComposer, setSessionComposer] = useState<"CYCLE" | "FREE">();
+  const [sessionSubjectId, setSessionSubjectId] = useState("");
+  const [sessionContentId, setSessionContentId] = useState("");
   const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
   const cycles = useQuery({
     queryKey: ["study-cycles"],
@@ -258,9 +553,22 @@ function ProtectedStudyCyclesPage() {
   const subjects = useQuery({
     queryKey: ["subjects", "active"],
     queryFn: () => listSubjects("active"),
-    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion),
+    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion || sessionComposer === "FREE"),
     staleTime: 30_000
   });
+  const currentSession = useQuery({
+    queryKey: ["study-session", "current"],
+    queryFn: loadCurrentStudySession,
+    enabled: auth.data?.state === "authenticated",
+    staleTime: 5_000
+  });
+  const sessionContents = useQuery({
+    queryKey: ["contents", sessionSubjectId, "active"],
+    queryFn: () => listContents(sessionSubjectId, "active"),
+    enabled: Boolean(sessionComposer && sessionSubjectId),
+    staleTime: 30_000
+  });
+  const liveSessionSeconds = useLiveSessionSeconds(currentSession.data);
 
   useEffect(() => {
     if (!showSuggestion || suggestionInitialized || !subjects.data) return;
@@ -274,7 +582,13 @@ function ProtectedStudyCyclesPage() {
     setSuggestionInitialized(true);
   }, [showSuggestion, suggestionInitialized, subjects.data]);
 
+  useEffect(() => {
+    if (sessionComposer !== "FREE" || sessionSubjectId || !subjects.data?.length) return;
+    setSessionSubjectId(subjects.data[0].id);
+  }, [sessionComposer, sessionSubjectId, subjects.data]);
+
   function editCycle(cycle: StudyCycle) {
+    setSavedAsCustomized(false);
     setSelectedCycleId(cycle.id);
     setDraftName(cycle.name);
     setDraftStages(cycle.stages.map((stage) => ({
@@ -321,10 +635,30 @@ function ProtectedStudyCyclesPage() {
       draftStages.map(({ subjectId, targetMinutes }) => ({ subjectId, targetMinutes }))
     ),
     onSuccess: (updated) => {
+      const becameCustomized = (
+        cycles.data?.find((cycle) => cycle.id === updated.id)?.mode === "SUGGESTED"
+        && updated.mode === "CUSTOM"
+      );
       queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
         current.map((cycle) => cycle.id === updated.id ? updated : cycle)
       );
       editCycle(updated);
+      setSavedAsCustomized(becameCustomized);
+    }
+  });
+  const regenerationMutation = useMutation({
+    mutationFn: ({ cycle, name, drafts }: { cycle: StudyCycle; name: string; drafts: SuggestedSubjectDraft[] }) =>
+      regenerateStudyCycleSuggestion(
+        cycle.id,
+        name,
+        drafts.map(({ subjectId, questionCount, weight, difficulty }) => ({ subjectId, questionCount, weight, difficulty }))
+      ),
+    onSuccess: (regenerated) => {
+      queryClient.setQueryData<StudyCycle[]>(["study-cycles"], (current = []) =>
+        current.map((cycle) => cycle.id === regenerated.id ? regenerated : cycle)
+      );
+      editCycle(regenerated);
+      setRegenerationCycle(undefined);
     }
   });
   const activationMutation = useMutation({
@@ -347,6 +681,19 @@ function ProtectedStudyCyclesPage() {
       setPendingCycle(undefined);
       setSelectedCycleId(undefined);
     }
+  });
+  const startSessionMutation = useMutation({
+    mutationFn: (input: StartStudySessionInput) => startStudySession(input),
+    onSuccess: (started) => {
+      queryClient.setQueryData(["study-session", "current"], started);
+      setSessionComposer(undefined);
+      setSessionContentId("");
+    }
+  });
+  const timerMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "pause" | "resume" }) =>
+      action === "pause" ? pauseStudySession(id) : resumeStudySession(id),
+    onSuccess: (updated) => queryClient.setQueryData(["study-session", "current"], updated)
   });
 
   function submitCycle(event: FormEvent) {
@@ -453,6 +800,16 @@ function ProtectedStudyCyclesPage() {
     }));
   const stagesAreValid = draftStages.every((stage) => stage.targetMinutes > 0 && stage.targetMinutes % 5 === 0);
   const activeCycle = cycles.data?.find((cycle) => cycle.status === "ACTIVE");
+  const activeStage = activeCycle?.stages[0];
+  const activeStageMeasuredSeconds = currentSession.data?.origin === "CYCLE"
+    && currentSession.data.cycle?.stageId === activeStage?.id
+    ? liveSessionSeconds
+    : 0;
+  const activeStageTargetSeconds = (activeStage?.targetMinutes ?? 0) * 60;
+  const activeStageProgress = activeStageTargetSeconds > 0
+    ? Math.min(100, Math.round((activeStageMeasuredSeconds / activeStageTargetSeconds) * 100))
+    : 0;
+  const activeStageRemainingMinutes = Math.max(0, Math.ceil((activeStageTargetSeconds - activeStageMeasuredSeconds) / 60));
   const otherCycles = cycles.data?.filter((cycle) => cycle.status !== "ACTIVE") ?? [];
   const selectedCycle = cycles.data?.find((cycle) => cycle.id === selectedCycleId);
   const activeCycleWouldBeEmpty = selectedCycle?.status === "ACTIVE" && draftStages.length === 0;
@@ -472,6 +829,48 @@ function ProtectedStudyCyclesPage() {
     activationMutation.mutate({ cycle });
   }
 
+  function openCycleSession() {
+    const stage = activeCycle?.stages[0];
+    if (!activeCycle || !stage || currentSession.data) return;
+    setSessionSubjectId(stage.subjectId);
+    setSessionContentId("");
+    startSessionMutation.reset();
+    setSessionComposer("CYCLE");
+  }
+
+  function openFreeSession() {
+    if (currentSession.data) return;
+    setSessionSubjectId(subjects.data?.[0]?.id ?? "");
+    setSessionContentId("");
+    startSessionMutation.reset();
+    setSessionComposer("FREE");
+  }
+
+  function closeSessionComposer() {
+    setSessionComposer(undefined);
+    setSessionSubjectId("");
+    setSessionContentId("");
+    startSessionMutation.reset();
+  }
+
+  function submitStudySession() {
+    if (sessionComposer === "CYCLE" && activeCycle) {
+      startSessionMutation.mutate({
+        origin: "CYCLE",
+        cycleId: activeCycle.id,
+        ...(sessionContentId ? { contentId: sessionContentId } : {})
+      });
+      return;
+    }
+    if (sessionComposer === "FREE" && sessionSubjectId) {
+      startSessionMutation.mutate({
+        origin: "FREE",
+        subjectId: sessionSubjectId,
+        ...(sessionContentId ? { contentId: sessionContentId } : {})
+      });
+    }
+  }
+
   if (auth.isPending) {
     return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
   }
@@ -489,10 +888,26 @@ function ProtectedStudyCyclesPage() {
             <p>Deixe o sistema distribuir seu tempo ou monte a sequência manualmente.</p>
           </div>
           <div className="cycle-heading-actions">
+            <button className="secondary-button" type="button" onClick={openFreeSession} disabled={Boolean(currentSession.data)}>Sessão livre</button>
             <button className="secondary-button" type="button" onClick={() => { closeSuggestion(); setShowCreate(true); }} disabled={showCreate}>Novo ciclo</button>
             <button className="primary-button" type="button" onClick={openSuggestion} disabled={showSuggestion}>Gerar ciclo sugerido</button>
           </div>
         </div>
+        {currentSession.data && (
+          <StudySessionDesk
+            session={currentSession.data}
+            seconds={liveSessionSeconds}
+            pending={timerMutation.isPending}
+            error={timerMutation.isError
+              ? timerMutation.error instanceof ApiError ? timerMutation.error.message : "Não foi possível sincronizar o cronômetro."
+              : undefined}
+            onPause={() => timerMutation.mutate({ id: currentSession.data!.id, action: "pause" })}
+            onResume={() => timerMutation.mutate({ id: currentSession.data!.id, action: "resume" })}
+          />
+        )}
+        {currentSession.isError && (
+          <p className="form-error" role="alert">Não foi possível recuperar o cronômetro aberto.</p>
+        )}
         {showSuggestion && (
           <section className="cycle-suggestion-composer" aria-labelledby="suggestion-title">
             <header className="cycle-suggestion-header">
@@ -619,6 +1034,24 @@ function ProtectedStudyCyclesPage() {
               </div>
               <button className="secondary-button cycle-active-edit" type="button" aria-label={`Editar ${activeCycle.name}`} onClick={() => editCycle(activeCycle)}>Editar ciclo</button>
             </header>
+            {activeStage && (
+              <section className="cycle-current-stage" aria-label={`Etapa atual: ${activeStage.subjectName}`}>
+                <span className="cycle-current-stage-index" aria-hidden="true">{String(activeStage.position).padStart(2, "0")}</span>
+                <div className="cycle-current-stage-copy">
+                  <span className="card-kicker">Etapa atual</span>
+                  <h3>{activeStage.subjectName}</h3>
+                  <p>Meta {formatCycleMinutes(activeStage.targetMinutes)}</p>
+                </div>
+                <div className="cycle-current-stage-numbers">
+                  <strong>{formatCycleMinutes(Math.floor(activeStageMeasuredSeconds / 60))} realizados</strong>
+                  <span>{formatCycleMinutes(activeStageRemainingMinutes)} restantes</span>
+                </div>
+                <button className="primary-button" type="button" aria-label={`Iniciar ${activeStage.subjectName}`} onClick={openCycleSession} disabled={Boolean(currentSession.data)}>
+                  {currentSession.data ? "Cronômetro em andamento" : "Iniciar etapa"}
+                </button>
+                <span className="cycle-current-stage-track" aria-hidden="true"><span style={{ width: `${activeStageProgress}%` }} /></span>
+              </section>
+            )}
             <div className="cycle-flow-intro">
               <div><span className="card-kicker">Mapa da volta</span><strong>Escolha livremente o que estudar</strong></div>
               <p>A ordem é uma sugestão. Você pode lançar estudo em qualquer atividade do ciclo.</p>
@@ -689,6 +1122,15 @@ function ProtectedStudyCyclesPage() {
               </div>
             </header>
             <form className="cycle-editor-form" onSubmit={submitCycleStages}>
+              {selectedCycle?.mode === "SUGGESTED" && (
+                <aside className="cycle-mode-notice" role="status" aria-label="Mudança de modo">
+                  <span className="cycle-mode-mark" aria-hidden="true">!</span>
+                  <div>
+                    <strong>Esta sugestão está prestes a virar o seu planejamento.</strong>
+                    <p>Ao salvar, este ciclo passará a personalizado. Novas entradas de sugestão não substituirão suas atividades sem confirmação.</p>
+                  </div>
+                </aside>
+              )}
               <label className="cycle-name-field">Nome do ciclo<input required maxLength={120} value={draftName} onChange={(event) => setDraftName(event.target.value)} /></label>
               {subjects.isPending && <p className="cycle-subject-state" aria-live="polite">Abrindo suas matérias…</p>}
               {subjects.isError && <p className="form-error" role="alert">Não foi possível carregar as matérias ativas.</p>}
@@ -730,9 +1172,14 @@ function ProtectedStudyCyclesPage() {
               )}
               <button className="cycle-add-stage" type="button" aria-label="Adicionar atividade" onClick={addStage} disabled={!subjects.data?.length}>+ Adicionar atividade</button>
               {updateMutation.isError && <p className="form-error" role="alert">{updateMutation.error instanceof ApiError ? updateMutation.error.message : "Não foi possível salvar o ciclo."}</p>}
-              {updateMutation.isSuccess && <p className="form-success" role="status">Ciclo salvo.</p>}
+              {updateMutation.isSuccess && (
+                <p className="form-success" role="status">
+                  {savedAsCustomized ? "Ciclo salvo como personalizado." : "Ciclo salvo."}
+                </p>
+              )}
               <div className="cycle-editor-actions">
                 <button className="secondary-button" type="button" onClick={() => setSelectedCycleId(undefined)}>Fechar editor</button>
+                <button className="secondary-button" type="button" onClick={() => selectedCycle && setRegenerationCycle(selectedCycle)}>Gerar nova sugestão</button>
                 <button className="primary-button" type="submit" disabled={updateMutation.isPending || !draftName.trim() || !stagesAreValid || activeCycleWouldBeEmpty}>{updateMutation.isPending ? "Salvando…" : "Salvar ciclo"}</button>
               </div>
             </form>
@@ -778,6 +1225,39 @@ function ProtectedStudyCyclesPage() {
               : undefined}
             onCancel={() => { activationMutation.reset(); setPendingCycle(undefined); }}
             onChoose={(currentRunAction) => activationMutation.mutate({ cycle: pendingCycle, currentRunAction })}
+          />
+        )}
+        {regenerationCycle && (
+          <RegenerationDialog
+            cycle={regenerationCycle}
+            subjects={subjects.data ?? []}
+            pending={regenerationMutation.isPending}
+            error={regenerationMutation.isError
+              ? regenerationMutation.error instanceof ApiError ? regenerationMutation.error.message : "Não foi possível regenerar a sugestão."
+              : undefined}
+            onCancel={() => { regenerationMutation.reset(); setRegenerationCycle(undefined); }}
+            onConfirm={(name, drafts) => regenerationMutation.mutate({ cycle: regenerationCycle, name, drafts })}
+          />
+        )}
+        {sessionComposer && (
+          <StartStudySessionDialog
+            origin={sessionComposer}
+            cycle={activeCycle}
+            stage={activeStage}
+            subjects={subjects.data ?? []}
+            contents={sessionContents.data ?? []}
+            selectedSubjectId={sessionSubjectId}
+            selectedContentId={sessionContentId}
+            loadingSubjects={subjects.isPending}
+            loadingContents={sessionContents.isPending}
+            pending={startSessionMutation.isPending}
+            error={startSessionMutation.isError
+              ? startSessionMutation.error instanceof ApiError ? startSessionMutation.error.message : "Não foi possível iniciar o cronômetro."
+              : undefined}
+            onSubjectChange={(subjectId) => { setSessionSubjectId(subjectId); setSessionContentId(""); }}
+            onContentChange={setSessionContentId}
+            onCancel={closeSessionComposer}
+            onSubmit={submitStudySession}
           />
         )}
       </main>

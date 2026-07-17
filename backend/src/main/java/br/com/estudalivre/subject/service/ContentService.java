@@ -49,6 +49,15 @@ public class ContentService {
         return ContentResponse.from(findOwned(contentId, subjectId, ownerId));
     }
 
+    @Transactional(readOnly = true)
+    public ContentResponse getActive(UUID ownerId, UUID subjectId, UUID contentId) {
+        Content content = findOwned(contentId, subjectId, ownerId);
+        if (content.archived()) {
+            throw new ContentNotFoundException();
+        }
+        return ContentResponse.from(content);
+    }
+
     @Transactional
     public ContentResponse update(
             UUID ownerId, UUID subjectId, UUID contentId, ContentNameRequest request) {

@@ -8,6 +8,7 @@ import br.com.estudalivre.studycycle.dto.StudyCycleSuggestionResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
 import br.com.estudalivre.studycycle.model.StudyCycle;
 import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleInput;
+import br.com.estudalivre.studycycle.planner.SuggestedStudyCyclePlan;
 import br.com.estudalivre.studycycle.planner.SuggestedStudyCyclePlanner;
 import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleSubject;
 import br.com.estudalivre.studycycle.repository.StudyCycleRepository;
@@ -36,32 +37,10 @@ public class StudyCycleService {
 
     @Transactional
     public StudyCycleResponse createSuggested(UUID ownerId, CreateSuggestedStudyCycleRequest request) {
-        var seenSubjectIds = new HashSet<UUID>();
-        List<SuggestedStudyCycleInput> inputs = request.subjects().stream()
-                .map(subject -> {
-                    if (!seenSubjectIds.add(subject.subjectId())) {
-                        throw new IllegalArgumentException("Cada matéria deve aparecer apenas uma vez na sugestão.");
-                    }
-                    var ownedSubject = subjectService.getActive(ownerId, subject.subjectId());
-                    return new SuggestedStudyCycleInput(
-                            subject.subjectId(),
-                            ownedSubject.name(),
-                            subject.questionCount(),
-                            subject.weight(),
-                            subject.difficulty());
-                })
-                .toList();
-        var plan = suggestedStudyCyclePlanner.generate(inputs);
+        var plan = planSuggestion(ownerId, request);
         UUID cycleId = UUID.randomUUID();
         studyCycleRepository.createSuggested(cycleId, ownerId, request.name());
-        for (int index = 0; index < plan.subjects().size(); index++) {
-            studyCycleRepository.createSuggestionSubject(cycleId, index + 1, plan.subjects().get(index));
-        }
-        for (int index = 0; index < plan.stages().size(); index++) {
-            var stage = plan.stages().get(index);
-            studyCycleRepository.createStage(
-                    UUID.randomUUID(), cycleId, stage.subjectId(), index + 1, stage.targetMinutes());
-        }
+        storeSuggestion(cycleId, plan);
         return toResponse(findOwned(cycleId, ownerId));
     }
 
@@ -107,6 +86,55 @@ public class StudyCycleService {
                     UUID.randomUUID(), cycleId, stage.subjectId(), index + 1, stage.targetMinutes());
         }
         return toResponse(findOwned(cycleId, ownerId));
+    }
+
+    @Transactional
+    public StudyCycleResponse regenerateSuggestion(
+            UUID ownerId,
+            UUID cycleId,
+            CreateSuggestedStudyCycleRequest request) {
+        findOwned(cycleId, ownerId);
+        var plan = planSuggestion(ownerId, request);
+
+        if (studyCycleRepository.updateSuggested(cycleId, ownerId, request.name()) == 0) {
+            throw new StudyCycleNotFoundException();
+        }
+        studyCycleRepository.deleteSuggestion(cycleId);
+        studyCycleRepository.deleteStages(cycleId);
+        storeSuggestion(cycleId, plan);
+        return toResponse(findOwned(cycleId, ownerId));
+    }
+
+    private SuggestedStudyCyclePlan planSuggestion(
+            UUID ownerId,
+            CreateSuggestedStudyCycleRequest request) {
+        var seenSubjectIds = new HashSet<UUID>();
+        List<SuggestedStudyCycleInput> inputs = request.subjects().stream()
+                .map(subject -> {
+                    if (!seenSubjectIds.add(subject.subjectId())) {
+                        throw new IllegalArgumentException("Cada matéria deve aparecer apenas uma vez na sugestão.");
+                    }
+                    var ownedSubject = subjectService.getActive(ownerId, subject.subjectId());
+                    return new SuggestedStudyCycleInput(
+                            subject.subjectId(),
+                            ownedSubject.name(),
+                            subject.questionCount(),
+                            subject.weight(),
+                            subject.difficulty());
+                })
+                .toList();
+        return suggestedStudyCyclePlanner.generate(inputs);
+    }
+
+    private void storeSuggestion(UUID cycleId, SuggestedStudyCyclePlan plan) {
+        for (int index = 0; index < plan.subjects().size(); index++) {
+            studyCycleRepository.createSuggestionSubject(cycleId, index + 1, plan.subjects().get(index));
+        }
+        for (int index = 0; index < plan.stages().size(); index++) {
+            var stage = plan.stages().get(index);
+            studyCycleRepository.createStage(
+                    UUID.randomUUID(), cycleId, stage.subjectId(), index + 1, stage.targetMinutes());
+        }
     }
 
     @Transactional

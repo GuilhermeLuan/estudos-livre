@@ -441,7 +441,7 @@ describe("authentication journey", () => {
 
   it("opens the authenticated custom cycle workspace with the user's drafts", async () => {
     window.history.pushState({}, "", "/ciclos");
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/auth/bootstrap-status") {
         return jsonResponse({ registrationRequired: false });
@@ -480,7 +480,7 @@ describe("authentication journey", () => {
     expect(screen.getAllByRole("link", { name: "Ciclos" })[0]).toHaveAttribute("aria-current", "page");
   });
 
-  it("shows the complete active flow without imposing a current stage", async () => {
+  it("shows the current stage, target, progress and remaining time above the complete flow", async () => {
     window.history.pushState({}, "", "/ciclos");
     document.cookie = "XSRF-TOKEN=token-ativacao; Path=/";
     const activeCycle = {
@@ -510,6 +510,7 @@ describe("authentication journey", () => {
       const url = String(input);
       if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
       if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
       if (url === "/api/study-cycles") return jsonResponse([activeCycle, pausedCycle]);
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -525,7 +526,161 @@ describe("authentication journey", () => {
     expect(within(flow).getAllByText("Português")).toHaveLength(2);
     expect(within(flow).getByText("Matemática")).toBeVisible();
     expect(within(flow).getByText("Sugestão")).toBeVisible();
-    expect(within(activeRegion).queryByText("Etapa atual")).not.toBeInTheDocument();
+    const currentStage = within(activeRegion).getByRole("region", { name: "Etapa atual: Português" });
+    expect(within(currentStage).getByText("Etapa atual")).toBeVisible();
+    expect(within(currentStage).getByText("Meta 1h")).toBeVisible();
+    expect(within(currentStage).getByText("0min realizados")).toBeVisible();
+    expect(within(currentStage).getByText("1h restantes")).toBeVisible();
+    expect(within(currentStage).getByRole("button", { name: "Iniciar Português" })).toBeEnabled();
+  });
+
+  it("starts the current cycle stage with one optional content", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-cronometro; Path=/";
+    const activeCycle = {
+      id: "cycle-active",
+      name: "Reta final",
+      mode: "CUSTOM",
+      status: "ACTIVE",
+      totalMinutes: 60,
+      activatable: true,
+      currentRun: { id: "run-active", number: 1, status: "IN_PROGRESS", startedAt: "2026-07-16T12:00:00Z" },
+      stages: [{ id: "stage-1", position: 1, subjectId: "subject-1", subjectName: "Português", targetMinutes: 60, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const startedSession = {
+      id: "session-1",
+      origin: "CYCLE",
+      status: "ACTIVE",
+      subject: { id: "subject-1", name: "Português" },
+      content: { id: "content-1", name: "Concordância verbal" },
+      cycle: { id: "cycle-active", name: "Reta final", runId: "run-active", runNumber: 1, stageId: "stage-1", stagePosition: 1, targetMinutes: 60 },
+      startedAt: "2026-07-16T12:00:00Z",
+      measuredSeconds: 0,
+      serverNow: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/subjects/subject-1/contents?status=active") return jsonResponse([
+        { id: "content-1", subjectId: "subject-1", name: "Concordância verbal", archived: false }
+      ]);
+      if (url === "/api/study-sessions" && init?.method === "POST") return jsonResponse(startedSession, 201);
+      if (url === "/api/study-cycles") return jsonResponse([activeCycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Iniciar Português" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Iniciar etapa atual" });
+    expect(within(dialog).getByText("Português")).toBeVisible();
+    const contentSelect = await within(dialog).findByLabelText("Conteúdo (opcional)");
+    fireEvent.change(contentSelect, { target: { value: "content-1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Iniciar cronômetro" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ origin: "CYCLE", cycleId: "cycle-active", contentId: "content-1" })
+      })
+    ));
+    const timer = await screen.findByRole("region", { name: "Cronômetro em andamento" });
+    expect(within(timer).getByText("Português")).toBeVisible();
+    expect(within(timer).getByText("Concordância verbal")).toBeVisible();
+    expect(within(timer).getByRole("button", { name: "Pausar" })).toBeEnabled();
+  });
+
+  it("starts a free session after choosing its subject", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-livre; Path=/";
+    const startedSession = {
+      id: "session-free",
+      origin: "FREE",
+      status: "ACTIVE",
+      subject: { id: "subject-law", name: "Direito Constitucional" },
+      content: null,
+      cycle: null,
+      startedAt: "2026-07-16T12:00:00Z",
+      measuredSeconds: 0,
+      serverNow: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-law", name: "Direito Constitucional", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([]);
+      if (url === "/api/study-sessions" && init?.method === "POST") return jsonResponse(startedSession, 201);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Sessão livre" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Iniciar sessão livre" });
+    const subjectSelect = await within(dialog).findByLabelText("Matéria");
+    expect(subjectSelect).toHaveValue("subject-law");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Iniciar cronômetro" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ origin: "FREE", subjectId: "subject-law" })
+      })
+    ));
+    expect(await screen.findByRole("region", { name: "Cronômetro em andamento" })).toHaveTextContent("Sessão livre");
+  });
+
+  it("recovers a paused timer from the backend and resumes it", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-retomada; Path=/";
+    const pausedSession = {
+      id: "session-paused",
+      origin: "FREE",
+      status: "PAUSED",
+      subject: { id: "subject-1", name: "Matemática" },
+      content: null,
+      cycle: null,
+      startedAt: "2026-07-16T10:00:00Z",
+      measuredSeconds: 3723,
+      serverNow: "2026-07-16T12:00:00Z"
+    };
+    const activeSession = { ...pausedSession, status: "ACTIVE", serverNow: "2026-07-16T12:05:00Z" };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return jsonResponse(pausedSession);
+      if (url === "/api/study-sessions/session-paused/resume" && init?.method === "POST") return jsonResponse(activeSession);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const timer = await screen.findByRole("region", { name: "Cronômetro pausado" });
+    expect(within(timer).getByText("01:02:03")).toBeVisible();
+    fireEvent.click(within(timer).getByRole("button", { name: "Retomar" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/session-paused/resume",
+      expect.objectContaining({ method: "POST" })
+    ));
+    expect(await screen.findByRole("region", { name: "Cronômetro em andamento" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Pausar" })).toBeEnabled();
   });
 
   it("asks how to switch cycles and pauses the current run when chosen", async () => {
@@ -729,6 +884,171 @@ describe("authentication journey", () => {
     expect(screen.getByText("2h por matéria, limitado entre 10h e 30h")).toBeVisible();
     expect(screen.getByText("Prioridade 40")).toBeVisible();
     expect(screen.getByLabelText("Carga de Língua Portuguesa: 5h 20min")).toBeVisible();
+  });
+
+  it("warns before the first manual save turns a suggested cycle into a custom one", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const suggestedCycle = {
+      id: "cycle-suggested",
+      name: "Reta final sugerida",
+      mode: "SUGGESTED",
+      status: "DRAFT",
+      totalMinutes: 600,
+      activatable: true,
+      currentRun: null,
+      suggestion: {
+        totalMinutes: 600,
+        durationRule: "2h por matéria, limitado entre 10h e 30h",
+        priorityRule: "questões × peso × dificuldade",
+        subjects: [{ subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", questionCount: 20, weight: 2, difficulty: "MEDIUM", priority: 50, allocatedMinutes: 600, appearanceCount: 4 }]
+      },
+      stages: [{ id: "stage-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 150, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const customizedCycle = {
+      ...suggestedCycle,
+      mode: "CUSTOM",
+      totalMinutes: 120,
+      suggestion: null,
+      stages: [{ ...suggestedCycle.stages[0], targetMinutes: 120 }]
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse([{ id: "subject-portuguese", name: "Língua Portuguesa", archived: false }]);
+      if (url === `/api/study-cycles/${suggestedCycle.id}` && init?.method === "PUT") return jsonResponse(customizedCycle);
+      if (url === "/api/study-cycles") return jsonResponse([suggestedCycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Reta final sugerida" }));
+
+    expect(await screen.findByRole("status", { name: "Mudança de modo" })).toHaveTextContent(
+      "Ao salvar, este ciclo passará a personalizado"
+    );
+    fireEvent.change(screen.getByLabelText("Duração da atividade 1 em minutos"), { target: { value: "120" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar ciclo" }));
+
+    expect(await screen.findByText("Ciclo salvo como personalizado.")).toBeVisible();
+  });
+
+  it("previews regeneration impact and cancels without replacing a custom plan", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    const cycle = {
+      id: "cycle-custom",
+      name: "Minha organização",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 90,
+      activatable: true,
+      currentRun: null,
+      suggestion: null,
+      stages: [{ id: "stage-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 90, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-portuguese", name: "Língua Portuguesa", archived: false },
+        { id: "subject-law", name: "Direito", archived: false }
+      ]);
+      if (url === "/api/study-cycles") return jsonResponse([cycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Minha organização" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Gerar nova sugestão" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Preparar nova sugestão" });
+    expect(within(dialog).getByLabelText("Planejamento atual: 1h 30min")).toBeVisible();
+    expect(within(dialog).getByLabelText("Nova sugestão estimada: 10h")).toBeVisible();
+    expect(within(dialog).getByText("As atividades atuais só serão substituídas depois da sua confirmação.")).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancelar" }));
+
+    expect(screen.queryByRole("dialog", { name: "Preparar nova sugestão" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Duração total do ciclo: 1h 30min")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      url === `/api/study-cycles/${cycle.id}/suggestion` && init?.method === "PUT"
+    )).toBe(false);
+  });
+
+  it("requires a second confirmation before regenerating and returning the cycle to suggested mode", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-regeneracao; Path=/";
+    const cycle = {
+      id: "cycle-custom",
+      name: "Minha organização",
+      mode: "CUSTOM",
+      status: "DRAFT",
+      totalMinutes: 90,
+      activatable: true,
+      currentRun: null,
+      suggestion: null,
+      stages: [{ id: "stage-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 90, longBlockWarning: false }],
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const regenerated = {
+      ...cycle,
+      mode: "SUGGESTED",
+      totalMinutes: 600,
+      suggestion: {
+        totalMinutes: 600,
+        durationRule: "2h por matéria, limitado entre 10h e 30h",
+        priorityRule: "questões × peso × dificuldade",
+        subjects: [{ subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", questionCount: 25, weight: 2, difficulty: "HARD", priority: 75, allocatedMinutes: 600, appearanceCount: 4 }]
+      },
+      stages: [{ id: "new-stage-1", position: 1, subjectId: "subject-portuguese", subjectName: "Língua Portuguesa", targetMinutes: 150, longBlockWarning: false }]
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/subjects?status=active") return jsonResponse([{ id: "subject-portuguese", name: "Língua Portuguesa", archived: false }]);
+      if (url === `/api/study-cycles/${cycle.id}/suggestion` && init?.method === "PUT") return jsonResponse(regenerated);
+      if (url === "/api/study-cycles") return jsonResponse([cycle]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Editar Minha organização" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Gerar nova sugestão" }));
+    const preparation = screen.getByRole("dialog", { name: "Preparar nova sugestão" });
+    fireEvent.change(within(preparation).getByLabelText("Questões de Língua Portuguesa"), { target: { value: "25" } });
+    fireEvent.change(within(preparation).getByLabelText("Peso de Língua Portuguesa"), { target: { value: "2" } });
+    fireEvent.change(within(preparation).getByLabelText("Dificuldade de Língua Portuguesa"), { target: { value: "HARD" } });
+    fireEvent.click(within(preparation).getByRole("button", { name: "Revisar substituição" }));
+
+    const confirmation = screen.getByRole("dialog", { name: "Confirmar nova sugestão" });
+    expect(within(confirmation).getByText("Seu planejamento personalizado de 1h 30min será substituído por uma sugestão estimada de 10h.")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      url === `/api/study-cycles/${cycle.id}/suggestion` && init?.method === "PUT"
+    )).toBe(false);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Confirmar regeneração" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/study-cycles/${cycle.id}/suggestion`,
+      expect.objectContaining({ method: "PUT" })
+    ));
+    const regenerationCall = fetchMock.mock.calls.find(([url, init]) =>
+      url === `/api/study-cycles/${cycle.id}/suggestion` && init?.method === "PUT"
+    );
+    expect(JSON.parse(String(regenerationCall?.[1]?.body))).toEqual({
+      name: "Minha organização",
+      subjects: [{ subjectId: "subject-portuguese", questionCount: 25, weight: 2, difficulty: "HARD" }]
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(await screen.findByText("Entenda o cálculo")).toBeVisible();
   });
 
   it("adds removes reorders and saves custom cycle stages with a long-block warning", async () => {

@@ -79,6 +79,26 @@ Do not introduce gradients or external font/CDN dependencies. Skeleton loading m
 - Minimum height 44px, padding 10px 16px, radius 8px.
 - Use `binder` for the primary action and reserve `late` for destructive or recovery contexts.
 
+### Current cycle stage
+
+- Present the current stage immediately above the cycle details as a focal strip, using a 4-column desktop layout: bookmark index, subject copy, progress numbers, and the primary action.
+- Use a 42 × 52px `marker-soft` bookmark for the stage position and a 4px progress track spanning the full strip.
+- Keep the subject name editorial and prominent; target, studied time, and remaining time use compact tabular values so the next action stays dominant.
+- At 760px, move progress numbers below the copy; at 420px, stack numbers and the action at full width.
+
+### Study session desk
+
+- Use a compact focal panel with `binder-soft` tint for an active timer and `marker-soft` tint for a paused timer. The state color communicates status; do not add decorative accent colors.
+- The timer is the visual anchor: tabular numerals, strong `binder` color while active, and enough whitespace to be readable at a glance.
+- Desktop layout uses a status mark, session identity, timer, and one transition action. Below 420px, preserve the identity pair and place the transition action on its own full-width row.
+- The backend remains the time source. Local interpolation may animate an active timer, but every transition and reload must resynchronize with persisted state.
+
+### Decision dialog
+
+- Use native `<dialog>` with a `paper-raised` panel, 18px radius, medium shadow, dimmed/blurred backdrop, and a 200ms entrance animation that honors reduced-motion preferences.
+- Header uses a 44–48px bookmark/status mark beside an editorial 27px title; body fields sit on the inset paper surface and actions remain in a separated footer.
+- Put the reversible action first and the consequential primary action last. On narrow mobile widths, stack footer actions at full width without changing their semantic order.
+
 ## Interaction and state rules
 
 - Loading uses a quiet skeleton/shimmer and honors `prefers-reduced-motion`.

@@ -141,6 +141,18 @@ public class StudyCycleRepository {
                 .update();
     }
 
+    public int updateSuggested(UUID id, UUID ownerId, String name) {
+        return jdbcClient.sql("""
+                        UPDATE study_cycle
+                        SET name = :name, mode = 'SUGGESTED', updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND owner_id = :ownerId
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .param("name", name)
+                .update();
+    }
+
     public void deleteSuggestion(UUID cycleId) {
         jdbcClient.sql("DELETE FROM study_cycle_suggestion_subject WHERE cycle_id = :cycleId")
                 .param("cycleId", cycleId)
