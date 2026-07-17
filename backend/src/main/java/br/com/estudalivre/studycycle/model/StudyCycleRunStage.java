@@ -2,16 +2,18 @@ package br.com.estudalivre.studycycle.model;
 
 import java.util.UUID;
 
-public record StudyCycleStage(
+public record StudyCycleRunStage(
         UUID id,
+        UUID runId,
         UUID cycleId,
+        UUID sourceStageId,
         UUID subjectId,
         String subjectName,
         int position,
-        int targetMinutes,
+        long targetSeconds,
         long creditedSeconds) {
 
-    public boolean longBlockWarning() {
-        return targetMinutes > 180;
+    public long remainingSeconds() {
+        return Math.max(0, targetSeconds - creditedSeconds);
     }
 }

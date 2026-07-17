@@ -32,6 +32,7 @@ public record StudyCycleResponse(
                         stage.subjectId(),
                         stage.subjectName(),
                         stage.targetMinutes(),
+                        stage.creditedSeconds(),
                         stage.longBlockWarning()))
                 .toList();
         return new StudyCycleResponse(
@@ -41,7 +42,13 @@ public record StudyCycleResponse(
                 cycle.status(),
                 stages.stream().mapToInt(StudyCycleStage::targetMinutes).sum(),
                 !stages.isEmpty(),
-                currentRun == null ? null : StudyCycleRunResponse.from(currentRun),
+                currentRun == null ? null : StudyCycleRunResponse.from(
+                        currentRun,
+                        stageResponses.stream()
+                                .filter(stage -> stage.creditedSeconds() < stage.targetMinutes() * 60L)
+                                .mapToInt(StudyCycleStageResponse::position)
+                                .findFirst()
+                                .orElse(stageResponses.size() + 1)),
                 suggestion,
                 stageResponses,
                 cycle.createdAt(),

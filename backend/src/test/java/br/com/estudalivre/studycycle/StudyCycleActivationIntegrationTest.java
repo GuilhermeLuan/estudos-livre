@@ -62,7 +62,7 @@ class StudyCycleActivationIntegrationTest {
     }
 
     @Test
-    void firstActivationCreatesACursorlessRun() throws Exception {
+    void firstActivationCreatesARunAtTheFirstStage() throws Exception {
         IdentityPrincipal principal = createUser("pessoa@example.com");
         UUID subjectId = createSubject(principal, "Direito Administrativo");
         UUID cycleId = createConfiguredCycle(principal, subjectId, "Reta final");
@@ -74,14 +74,14 @@ class StudyCycleActivationIntegrationTest {
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.currentRun.number").value(1))
                 .andExpect(jsonPath("$.currentRun.status").value("IN_PROGRESS"))
-                .andExpect(jsonPath("$.currentRun.currentStagePosition").doesNotExist());
+                .andExpect(jsonPath("$.currentRun.currentStagePosition").value(1));
 
         mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.currentRun.number").value(1))
                 .andExpect(jsonPath("$.currentRun.status").value("IN_PROGRESS"))
-                .andExpect(jsonPath("$.currentRun.currentStagePosition").doesNotExist());
+                .andExpect(jsonPath("$.currentRun.currentStagePosition").value(1));
     }
 
     @Test

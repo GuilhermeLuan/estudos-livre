@@ -1,7 +1,9 @@
 package br.com.estudalivre.studysession.dto;
 
 import br.com.estudalivre.studysession.model.StudySession;
+import br.com.estudalivre.studysession.model.StudySessionCredit;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 public record StudySessionResponse(
@@ -13,6 +15,10 @@ public record StudySessionResponse(
         CycleReference cycle,
         OffsetDateTime startedAt,
         long measuredSeconds,
+        Long effectiveSeconds,
+        OffsetDateTime finishedAt,
+        int version,
+        List<CreditReference> credits,
         OffsetDateTime serverNow) {
 
     public record SubjectReference(UUID id, String name) {
@@ -31,7 +37,16 @@ public record StudySessionResponse(
             int targetMinutes) {
     }
 
-    public static StudySessionResponse from(StudySession session) {
+    public record CreditReference(
+            UUID runStageId,
+            UUID cycleId,
+            UUID runId,
+            UUID cycleStageId,
+            int stagePosition,
+            long creditedSeconds) {
+    }
+
+    public static StudySessionResponse from(StudySession session, List<StudySessionCredit> credits) {
         return new StudySessionResponse(
                 session.id(),
                 session.origin(),
@@ -52,6 +67,18 @@ public record StudySessionResponse(
                                 session.targetMinutes()),
                 session.startedAt(),
                 session.measuredSeconds(),
+                session.effectiveSeconds(),
+                session.finishedAt(),
+                session.version(),
+                credits.stream()
+                        .map(credit -> new CreditReference(
+                                credit.runStageId(),
+                                credit.cycleId(),
+                                credit.runId(),
+                                credit.cycleStageId(),
+                                credit.stagePosition(),
+                                credit.creditedSeconds()))
+                        .toList(),
                 session.serverNow());
     }
 }

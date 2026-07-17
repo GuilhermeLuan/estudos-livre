@@ -28,6 +28,7 @@ import {
   createStudyCycle,
   createSuggestedStudyCycle,
   CycleSwitchAction,
+  listStudyCycleRuns,
   listStudyCycles,
   regenerateStudyCycleSuggestion,
   StudyCycle,
@@ -35,6 +36,7 @@ import {
   updateStudyCycle
 } from "./study-cycle-api";
 import {
+  finishStudySession,
   loadCurrentStudySession,
   pauseStudySession,
   resumeStudySession,
@@ -150,6 +152,11 @@ function formatCycleMinutes(totalMinutes: number) {
   const minutes = totalMinutes % 60;
   if (hours === 0) return `${minutes}min`;
   return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}min`;
+}
+
+function formatRunDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" })
+    .format(new Date(value));
 }
 
 function CycleSuggestionExplanation({ cycle }: { cycle: StudyCycle }) {
@@ -383,6 +390,12 @@ function formatTimer(totalSeconds: number) {
   return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
 }
 
+function parseTimer(value: string) {
+  const match = /^(\d+):([0-5]\d):([0-5]\d)$/.exec(value.trim());
+  if (!match) return null;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+}
+
 function useLiveSessionSeconds(session: StudySession | null | undefined) {
   const [seconds, setSeconds] = useState(session?.measuredSeconds ?? 0);
 
@@ -403,13 +416,14 @@ function useLiveSessionSeconds(session: StudySession | null | undefined) {
   return seconds;
 }
 
-function StudySessionDesk({ session, seconds, pending, error, onPause, onResume }: {
+function StudySessionDesk({ session, seconds, pending, error, onPause, onResume, onFinish }: {
   session: StudySession;
   seconds: number;
   pending: boolean;
   error?: string;
   onPause: () => void;
   onResume: () => void;
+  onFinish: () => void;
 }) {
   return (
     <section
@@ -426,16 +440,94 @@ function StudySessionDesk({ session, seconds, pending, error, onPause, onResume 
         <span>{session.status === "ACTIVE" ? "Tempo líquido" : "Pausado"}</span>
         <strong>{formatTimer(seconds)}</strong>
       </div>
-      <button
-        className={session.status === "ACTIVE" ? "secondary-button" : "primary-button"}
-        type="button"
-        onClick={session.status === "ACTIVE" ? onPause : onResume}
-        disabled={pending}
-      >
-        {pending ? "Sincronizando…" : session.status === "ACTIVE" ? "Pausar" : "Retomar"}
-      </button>
+      <div className="study-session-actions">
+        <button
+          className={session.status === "ACTIVE" ? "secondary-button" : "primary-button"}
+          type="button"
+          onClick={session.status === "ACTIVE" ? onPause : onResume}
+          disabled={pending}
+        >
+          {pending ? "Sincronizando…" : session.status === "ACTIVE" ? "Pausar" : "Retomar"}
+        </button>
+        <button className="secondary-button" type="button" onClick={onFinish} disabled={pending}>Finalizar</button>
+      </div>
       {error && <p className="form-error" role="alert">{error}</p>}
     </section>
+  );
+}
+
+function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration, pending, error, onDurationChange, onCancel, onSubmit }: {
+  session: StudySession;
+  measuredSeconds: number;
+  effectiveDuration: string;
+  pending: boolean;
+  error?: string;
+  onDurationChange: (duration: string) => void;
+  onCancel: () => void;
+  onSubmit: (effectiveSeconds: number) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const effectiveSeconds = parseTimer(effectiveDuration);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog finish-session-dialog" ref={dialogRef} aria-labelledby="finish-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds !== null) onSubmit(effectiveSeconds); }}>
+        <header>
+          <span className="study-session-dialog-mark" aria-hidden="true">✓</span>
+          <div>
+            <span className="card-kicker">Fechamento do bloco</span>
+            <h2 id="finish-session-title">Finalizar sessão</h2>
+            <p>Confirme apenas o tempo que realmente representou estudo focado.</p>
+          </div>
+        </header>
+        <div className="finish-session-body">
+          <div className="finish-session-measured">
+            <span>Tempo medido</span>
+            <strong>{formatTimer(measuredSeconds)}</strong>
+            <small>Pausas já foram descontadas pelo cronômetro.</small>
+          </div>
+          <label htmlFor="effective-duration">Duração efetiva
+            <input
+              id="effective-duration"
+              aria-label="Duração efetiva"
+              autoFocus
+              inputMode="numeric"
+              pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]"
+              aria-describedby="effective-duration-hint"
+              value={effectiveDuration}
+              onChange={(event) => onDurationChange(event.target.value)}
+              disabled={pending}
+              required
+            />
+            <small id="effective-duration-hint">Use horas:minutos:segundos, por exemplo 00:45:00.</small>
+          </label>
+          <div className="finish-session-credit">
+            <span className="finish-session-credit-mark" aria-hidden="true">{String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}</span>
+            <div>
+              <span>{session.cycle ? "Crédito previsto" : "Registro da sessão"}</span>
+              <strong>{session.cycle ? `Etapa ${String(session.cycle.stagePosition).padStart(2, "0")} · ${session.subject.name}` : `Sessão livre · ${session.subject.name}`}</strong>
+              <small>{session.cycle ? "O tempo será aplicado até o restante da etapa desta matéria." : "O tempo ficará nas métricas, sem alterar uma etapa do ciclo."}</small>
+            </div>
+          </div>
+        </div>
+        {effectiveSeconds === null && <p className="form-error" role="alert">Informe a duração no formato horas:minutos:segundos.</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Continuar estudando</button>
+          <button className="primary-button" type="submit" disabled={pending || effectiveSeconds === null}>{pending ? "Finalizando…" : "Finalizar sessão"}</button>
+        </footer>
+      </form>
+    </dialog>
   );
 }
 
@@ -543,11 +635,22 @@ function ProtectedStudyCyclesPage() {
   const [sessionComposer, setSessionComposer] = useState<"CYCLE" | "FREE">();
   const [sessionSubjectId, setSessionSubjectId] = useState("");
   const [sessionContentId, setSessionContentId] = useState("");
+  const [finishingSession, setFinishingSession] = useState<StudySession>();
+  const [effectiveDuration, setEffectiveDuration] = useState("");
+  const [finishMeasuredSeconds, setFinishMeasuredSeconds] = useState(0);
+  const [showRunLedger, setShowRunLedger] = useState(false);
   const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
   const cycles = useQuery({
     queryKey: ["study-cycles"],
     queryFn: listStudyCycles,
     enabled: auth.data?.state === "authenticated",
+    staleTime: 30_000
+  });
+  const activeCycleId = cycles.data?.find((cycle) => cycle.status === "ACTIVE")?.id;
+  const runHistory = useQuery({
+    queryKey: ["study-cycle-runs", activeCycleId],
+    queryFn: () => listStudyCycleRuns(activeCycleId!),
+    enabled: showRunLedger && Boolean(activeCycleId),
     staleTime: 30_000
   });
   const subjects = useQuery({
@@ -695,6 +798,18 @@ function ProtectedStudyCyclesPage() {
       action === "pause" ? pauseStudySession(id) : resumeStudySession(id),
     onSuccess: (updated) => queryClient.setQueryData(["study-session", "current"], updated)
   });
+  const finishSessionMutation = useMutation({
+    mutationFn: ({ session, effectiveSeconds }: { session: StudySession; effectiveSeconds: number }) =>
+      finishStudySession(session.id, effectiveSeconds, session.version),
+    onSuccess: () => {
+      queryClient.setQueryData(["study-session", "current"], null);
+      void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
+      void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
+      setFinishingSession(undefined);
+      setEffectiveDuration("");
+      setFinishMeasuredSeconds(0);
+    }
+  });
 
   function submitCycle(event: FormEvent) {
     event.preventDefault();
@@ -800,11 +915,13 @@ function ProtectedStudyCyclesPage() {
     }));
   const stagesAreValid = draftStages.every((stage) => stage.targetMinutes > 0 && stage.targetMinutes % 5 === 0);
   const activeCycle = cycles.data?.find((cycle) => cycle.status === "ACTIVE");
-  const activeStage = activeCycle?.stages[0];
-  const activeStageMeasuredSeconds = currentSession.data?.origin === "CYCLE"
+  const activeStage = activeCycle?.stages.find((stage) =>
+    stage.position === (activeCycle.currentRun?.currentStagePosition ?? 1)
+  );
+  const activeStageMeasuredSeconds = (activeStage?.creditedSeconds ?? 0) + (currentSession.data?.origin === "CYCLE"
     && currentSession.data.cycle?.stageId === activeStage?.id
     ? liveSessionSeconds
-    : 0;
+    : 0);
   const activeStageTargetSeconds = (activeStage?.targetMinutes ?? 0) * 60;
   const activeStageProgress = activeStageTargetSeconds > 0
     ? Math.min(100, Math.round((activeStageMeasuredSeconds / activeStageTargetSeconds) * 100))
@@ -830,7 +947,7 @@ function ProtectedStudyCyclesPage() {
   }
 
   function openCycleSession() {
-    const stage = activeCycle?.stages[0];
+    const stage = activeStage;
     if (!activeCycle || !stage || currentSession.data) return;
     setSessionSubjectId(stage.subjectId);
     setSessionContentId("");
@@ -871,6 +988,22 @@ function ProtectedStudyCyclesPage() {
     }
   }
 
+  function openFinishSession() {
+    if (!currentSession.data) return;
+    finishSessionMutation.reset();
+    setEffectiveDuration(formatTimer(liveSessionSeconds));
+    setFinishMeasuredSeconds(liveSessionSeconds);
+    setFinishingSession(currentSession.data);
+  }
+
+  function closeFinishSession() {
+    if (finishSessionMutation.isPending) return;
+    setFinishingSession(undefined);
+    setEffectiveDuration("");
+    setFinishMeasuredSeconds(0);
+    finishSessionMutation.reset();
+  }
+
   if (auth.isPending) {
     return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
   }
@@ -903,6 +1036,7 @@ function ProtectedStudyCyclesPage() {
               : undefined}
             onPause={() => timerMutation.mutate({ id: currentSession.data!.id, action: "pause" })}
             onResume={() => timerMutation.mutate({ id: currentSession.data!.id, action: "resume" })}
+            onFinish={openFinishSession}
           />
         )}
         {currentSession.isError && (
@@ -1054,18 +1188,71 @@ function ProtectedStudyCyclesPage() {
             )}
             <div className="cycle-flow-intro">
               <div><span className="card-kicker">Mapa da volta</span><strong>Escolha livremente o que estudar</strong></div>
-              <p>A ordem é uma sugestão. Você pode lançar estudo em qualquer atividade do ciclo.</p>
+              <div className="cycle-flow-note">
+                <p>A ordem é uma sugestão. O crédito pode adiantar etapas da mesma matéria.</p>
+                <button
+                  className="secondary-button cycle-ledger-toggle"
+                  type="button"
+                  aria-expanded={showRunLedger}
+                  onClick={() => setShowRunLedger((current) => !current)}
+                >
+                  {showRunLedger ? "Fechar caderno de voltas" : "Abrir caderno de voltas"}
+                </button>
+              </div>
             </div>
             <ol className="cycle-flow-map" aria-label="Fluxo completo da volta">
-              {activeCycle.stages.map((stage, index) => (
-                <li className="cycle-flow-item" key={stage.id}>
+              {activeCycle.stages.map((stage) => (
+                <li className={`cycle-flow-item ${stage.position === activeCycle.currentRun?.currentStagePosition ? "current" : ""}`} key={stage.id}>
                   <span className="cycle-flow-index" aria-hidden="true">{String(stage.position).padStart(2, "0")}</span>
                   <div><strong>{stage.subjectName}</strong><span>Atividade {stage.position}</span></div>
-                  {index === 0 && <span className="cycle-suggestion">Sugestão</span>}
+                  {stage.position === activeCycle.currentRun?.currentStagePosition && <span className="cycle-suggestion">Sugestão</span>}
                   <strong className="cycle-flow-duration">{formatCycleMinutes(stage.targetMinutes)}</strong>
                 </li>
               ))}
             </ol>
+            {showRunLedger && (
+              <section className="cycle-run-ledger" aria-label="Caderno de voltas">
+                <header>
+                  <div>
+                    <span className="card-kicker">Registro preservado</span>
+                    <h3>Caderno de voltas</h3>
+                  </div>
+                  <p>Metas e créditos ficam guardados como eram em cada volta.</p>
+                </header>
+                {runHistory.isPending && <p className="cycle-ledger-state" aria-live="polite">Abrindo o caderno…</p>}
+                {runHistory.isError && (
+                  <div className="cycle-ledger-state" role="alert">
+                    <span>Não foi possível abrir as voltas.</span>
+                    <button className="secondary-button" type="button" onClick={() => void runHistory.refetch()}>Tentar novamente</button>
+                  </div>
+                )}
+                {runHistory.data && (
+                  <ol className="cycle-run-list">
+                    {runHistory.data.map((run) => (
+                      <li className={`cycle-run-entry ${run.status === "IN_PROGRESS" ? "current" : ""}`} key={run.id}>
+                        <span className="cycle-run-marker" aria-hidden="true">{String(run.number).padStart(2, "0")}</span>
+                        <article>
+                          <header>
+                            <div><strong>Volta {run.number}</strong><span>{formatRunDate(run.startedAt)}</span></div>
+                            <span className={`cycle-run-status ${run.status.toLowerCase()}`}>
+                              {run.status === "COMPLETED" ? "Concluída" : run.status === "IN_PROGRESS" ? "Em andamento" : run.status === "PAUSED" ? "Pausada" : "Encerrada"}
+                            </span>
+                          </header>
+                          <ul>
+                            {run.stages.map((stage) => (
+                              <li key={stage.id}>
+                                <div><strong>{stage.subjectName}</strong><span>Etapa {stage.position}</span></div>
+                                <span>{formatCycleMinutes(Math.floor(stage.creditedSeconds / 60))} de {formatCycleMinutes(Math.floor(stage.targetSeconds / 60))}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            )}
             <CycleSuggestionExplanation cycle={activeCycle} />
           </section>
         )}
@@ -1258,6 +1445,20 @@ function ProtectedStudyCyclesPage() {
             onContentChange={setSessionContentId}
             onCancel={closeSessionComposer}
             onSubmit={submitStudySession}
+          />
+        )}
+        {finishingSession && (
+          <FinishStudySessionDialog
+            session={finishingSession}
+            measuredSeconds={finishMeasuredSeconds}
+            effectiveDuration={effectiveDuration}
+            pending={finishSessionMutation.isPending}
+            error={finishSessionMutation.isError
+              ? finishSessionMutation.error instanceof ApiError ? finishSessionMutation.error.message : "Não foi possível finalizar a sessão."
+              : undefined}
+            onDurationChange={setEffectiveDuration}
+            onCancel={closeFinishSession}
+            onSubmit={(effectiveSeconds) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds })}
           />
         )}
       </main>

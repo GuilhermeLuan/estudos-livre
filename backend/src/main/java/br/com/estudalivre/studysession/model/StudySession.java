@@ -21,5 +21,8 @@ public record StudySession(
         Integer targetMinutes,
         OffsetDateTime startedAt,
         long measuredSeconds,
+        Long effectiveSeconds,
+        OffsetDateTime finishedAt,
+        int version,
         OffsetDateTime serverNow) {
 }

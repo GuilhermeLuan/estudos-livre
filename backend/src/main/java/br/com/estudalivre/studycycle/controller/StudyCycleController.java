@@ -5,6 +5,7 @@ import br.com.estudalivre.studycycle.dto.ActivateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CreateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CreateSuggestedStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
+import br.com.estudalivre.studycycle.dto.StudyCycleRunHistoryResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
 import br.com.estudalivre.studycycle.service.StudyCycleService;
 import jakarta.validation.Valid;
@@ -57,6 +58,13 @@ public class StudyCycleController {
             @AuthenticationPrincipal IdentityPrincipal principal,
             @PathVariable UUID id) {
         return studyCycleService.get(principal.id(), id);
+    }
+
+    @GetMapping("/{id}/runs")
+    public List<StudyCycleRunHistoryResponse> runs(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id) {
+        return studyCycleService.runs(principal.id(), id);
     }
 
     @PutMapping("/{id}")

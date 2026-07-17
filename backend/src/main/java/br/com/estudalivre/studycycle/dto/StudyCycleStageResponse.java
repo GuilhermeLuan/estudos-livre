@@ -8,5 +8,6 @@ public record StudyCycleStageResponse(
         UUID subjectId,
         String subjectName,
         int targetMinutes,
+        long creditedSeconds,
         boolean longBlockWarning) {
 }

@@ -4,6 +4,7 @@ import br.com.estudalivre.studycycle.dto.CreateStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CreateSuggestedStudyCycleRequest;
 import br.com.estudalivre.studycycle.dto.CycleSwitchAction;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
+import br.com.estudalivre.studycycle.dto.StudyCycleRunHistoryResponse;
 import br.com.estudalivre.studycycle.dto.StudyCycleSuggestionResponse;
 import br.com.estudalivre.studycycle.dto.UpdateStudyCycleRequest;
 import br.com.estudalivre.studycycle.model.StudyCycle;
@@ -62,6 +63,15 @@ public class StudyCycleService {
     @Transactional(readOnly = true)
     public StudyCycleResponse get(UUID ownerId, UUID cycleId) {
         return toResponse(findOwned(cycleId, ownerId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<StudyCycleRunHistoryResponse> runs(UUID ownerId, UUID cycleId) {
+        findOwned(cycleId, ownerId);
+        return studyCycleRepository.findRuns(cycleId).stream()
+                .map(run -> StudyCycleRunHistoryResponse.from(
+                        run, studyCycleRepository.findRunStages(run.id())))
+                .toList();
     }
 
     @Transactional
@@ -158,7 +168,9 @@ public class StudyCycleService {
 
         var currentRun = studyCycleRepository.findCurrentRun(cycleId);
         if (currentRun.isEmpty()) {
-            studyCycleRepository.createRun(UUID.randomUUID(), cycleId);
+            UUID runId = UUID.randomUUID();
+            studyCycleRepository.createRun(runId, cycleId);
+            studyCycleRepository.snapshotRunStages(runId, cycleId);
         } else if (currentRun.orElseThrow().status().equals("PAUSED")) {
             studyCycleRepository.resumeCurrentRun(cycleId);
         }

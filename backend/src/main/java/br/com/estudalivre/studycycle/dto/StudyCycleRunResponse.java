@@ -8,13 +8,15 @@ public record StudyCycleRunResponse(
         UUID id,
         int number,
         String status,
-        OffsetDateTime startedAt) {
+        OffsetDateTime startedAt,
+        int currentStagePosition) {
 
-    public static StudyCycleRunResponse from(StudyCycleRun run) {
+    public static StudyCycleRunResponse from(StudyCycleRun run, int currentStagePosition) {
         return new StudyCycleRunResponse(
                 run.id(),
                 run.number(),
                 run.status(),
-                run.startedAt());
+                run.startedAt(),
+                currentStagePosition);
     }
 }

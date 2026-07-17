@@ -6,6 +6,7 @@ export type StudyCycleStage = {
   subjectId: string;
   subjectName: string;
   targetMinutes: number;
+  creditedSeconds: number;
   longBlockWarning: boolean;
 };
 
@@ -21,6 +22,7 @@ export type StudyCycle = {
     number: number;
     status: "IN_PROGRESS" | "PAUSED";
     startedAt: string;
+    currentStagePosition: number;
   } | null;
   suggestion?: {
     totalMinutes: number;
@@ -42,6 +44,24 @@ export type StudyCycle = {
   updatedAt: string;
 };
 
+export type StudyCycleRunHistory = {
+  id: string;
+  number: number;
+  status: "IN_PROGRESS" | "PAUSED" | "COMPLETED" | "ABANDONED";
+  startedAt: string;
+  endedAt: string | null;
+  stages: Array<{
+    id: string;
+    sourceStageId: string | null;
+    position: number;
+    subjectId: string;
+    subjectName: string;
+    targetSeconds: number;
+    creditedSeconds: number;
+    completed: boolean;
+  }>;
+};
+
 export type StudyCycleStageInput = {
   subjectId: string;
   targetMinutes: number;
@@ -61,6 +81,12 @@ export async function listStudyCycles(): Promise<StudyCycle[]> {
   const response = await apiFetch("/api/study-cycles");
   await requireSuccess(response, "Não foi possível consultar seus ciclos.");
   return response.json() as Promise<StudyCycle[]>;
+}
+
+export async function listStudyCycleRuns(id: string): Promise<StudyCycleRunHistory[]> {
+  const response = await apiFetch(`/api/study-cycles/${id}/runs`);
+  await requireSuccess(response, "Não foi possível abrir o histórico de voltas.");
+  return response.json() as Promise<StudyCycleRunHistory[]>;
 }
 
 export async function createStudyCycle(name: string): Promise<StudyCycle> {

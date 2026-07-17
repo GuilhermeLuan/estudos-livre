@@ -2,6 +2,7 @@ package br.com.estudalivre.studysession.controller;
 
 import br.com.estudalivre.identity.service.IdentityPrincipal;
 import br.com.estudalivre.studysession.dto.StartStudySessionRequest;
+import br.com.estudalivre.studysession.dto.FinishStudySessionRequest;
 import br.com.estudalivre.studysession.dto.StudySessionResponse;
 import br.com.estudalivre.studysession.service.StudySessionService;
 import jakarta.validation.Valid;
@@ -54,5 +55,13 @@ public class StudySessionController {
             @AuthenticationPrincipal IdentityPrincipal principal,
             @PathVariable UUID id) {
         return studySessionService.resume(principal.id(), id);
+    }
+
+    @PostMapping("/{id}/finish")
+    public StudySessionResponse finish(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id,
+            @Valid @RequestBody FinishStudySessionRequest request) {
+        return studySessionService.finish(principal.id(), id, request);
     }
 }

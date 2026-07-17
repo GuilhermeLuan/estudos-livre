@@ -2,6 +2,7 @@ package br.com.estudalivre.studycycle.repository;
 
 import br.com.estudalivre.studycycle.model.StudyCycle;
 import br.com.estudalivre.studycycle.model.StudyCycleRun;
+import br.com.estudalivre.studycycle.model.StudyCycleRunStage;
 import br.com.estudalivre.studycycle.model.StudyCycleStage;
 import br.com.estudalivre.studycycle.planner.StudyCycleDifficulty;
 import br.com.estudalivre.studycycle.planner.SuggestedStudyCycleSubject;
@@ -186,9 +187,16 @@ public class StudyCycleRepository {
     public List<StudyCycleStage> findStages(UUID cycleId) {
         return jdbcClient.sql("""
                         SELECT stage.id, stage.cycle_id, stage.subject_id, subject.name AS subject_name,
-                               stage.position, stage.target_minutes
+                               stage.position, stage.target_minutes,
+                               COALESCE(run_stage.credited_seconds, 0) AS credited_seconds
                         FROM study_cycle_stage stage
                         JOIN subject ON subject.id = stage.subject_id
+                        LEFT JOIN study_cycle_run current_run
+                          ON current_run.cycle_id = stage.cycle_id
+                         AND current_run.status IN ('IN_PROGRESS', 'PAUSED')
+                        LEFT JOIN study_cycle_run_stage run_stage
+                          ON run_stage.run_id = current_run.id
+                         AND run_stage.source_stage_id = stage.id
                         WHERE stage.cycle_id = :cycleId
                         ORDER BY stage.position
                         """)
@@ -276,9 +284,97 @@ public class StudyCycleRepository {
                 .update();
     }
 
+    public void snapshotRunStages(UUID runId, UUID cycleId) {
+        jdbcClient.sql("""
+                        INSERT INTO study_cycle_run_stage (
+                            id, run_id, cycle_id, source_stage_id, subject_id,
+                            subject_name, position, target_seconds
+                        )
+                        SELECT gen_random_uuid(), :runId, :cycleId, stage.id, stage.subject_id,
+                               subject.name, stage.position, stage.target_minutes * 60::BIGINT
+                        FROM study_cycle_stage stage
+                        JOIN subject ON subject.id = stage.subject_id
+                        WHERE stage.cycle_id = :cycleId
+                        ORDER BY stage.position
+                        """)
+                .param("runId", runId)
+                .param("cycleId", cycleId)
+                .update();
+    }
+
+    public List<StudyCycleRunStage> findRunStagesForUpdate(UUID runId) {
+        return jdbcClient.sql("""
+                        SELECT id, run_id, cycle_id, source_stage_id, subject_id, subject_name,
+                               position, target_seconds, credited_seconds
+                        FROM study_cycle_run_stage
+                        WHERE run_id = :runId
+                        ORDER BY position
+                        FOR UPDATE
+                        """)
+                .param("runId", runId)
+                .query(StudyCycleRepository::mapRunStage)
+                .list();
+    }
+
+    public List<StudyCycleRunStage> findRunStages(UUID runId) {
+        return jdbcClient.sql("""
+                        SELECT id, run_id, cycle_id, source_stage_id, subject_id, subject_name,
+                               position, target_seconds, credited_seconds
+                        FROM study_cycle_run_stage
+                        WHERE run_id = :runId
+                        ORDER BY position
+                        """)
+                .param("runId", runId)
+                .query(StudyCycleRepository::mapRunStage)
+                .list();
+    }
+
+    public int creditRunStage(UUID runStageId, long creditedSeconds) {
+        return jdbcClient.sql("""
+                        UPDATE study_cycle_run_stage
+                        SET credited_seconds = credited_seconds + :creditedSeconds,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :runStageId
+                          AND credited_seconds + :creditedSeconds <= target_seconds
+                        """)
+                .param("runStageId", runStageId)
+                .param("creditedSeconds", creditedSeconds)
+                .update();
+    }
+
+    public int completeRunIfFinished(UUID runId) {
+        return jdbcClient.sql("""
+                        UPDATE study_cycle_run run
+                        SET status = 'COMPLETED', ended_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE run.id = :runId
+                          AND run.status IN ('IN_PROGRESS', 'PAUSED')
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM study_cycle_run_stage stage
+                              WHERE stage.run_id = run.id
+                                AND stage.credited_seconds < stage.target_seconds
+                          )
+                        """)
+                .param("runId", runId)
+                .update();
+    }
+
+    public List<StudyCycleRun> findRuns(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT id, cycle_id, run_number, status, started_at, ended_at
+                        FROM study_cycle_run
+                        WHERE cycle_id = :cycleId
+                        ORDER BY run_number DESC
+                        """)
+                .param("cycleId", cycleId)
+                .query(StudyCycleRepository::mapRun)
+                .list();
+    }
+
     public Optional<StudyCycleRun> findCurrentRun(UUID cycleId) {
         return jdbcClient.sql("""
-                        SELECT id, cycle_id, run_number, status, started_at
+                        SELECT id, cycle_id, run_number, status, started_at, ended_at
                         FROM study_cycle_run
                         WHERE cycle_id = :cycleId
                           AND status IN ('IN_PROGRESS', 'PAUSED')
@@ -308,7 +404,8 @@ public class StudyCycleRepository {
                 resultSet.getObject("subject_id", UUID.class),
                 resultSet.getString("subject_name"),
                 resultSet.getInt("position"),
-                resultSet.getInt("target_minutes"));
+                resultSet.getInt("target_minutes"),
+                resultSet.getLong("credited_seconds"));
     }
 
     private static StudyCycleRun mapRun(ResultSet resultSet, int rowNumber) throws SQLException {
@@ -317,6 +414,20 @@ public class StudyCycleRepository {
                 resultSet.getObject("cycle_id", UUID.class),
                 resultSet.getInt("run_number"),
                 resultSet.getString("status"),
-                resultSet.getObject("started_at", OffsetDateTime.class));
+                resultSet.getObject("started_at", OffsetDateTime.class),
+                resultSet.getObject("ended_at", OffsetDateTime.class));
+    }
+
+    private static StudyCycleRunStage mapRunStage(ResultSet resultSet, int rowNumber) throws SQLException {
+        return new StudyCycleRunStage(
+                resultSet.getObject("id", UUID.class),
+                resultSet.getObject("run_id", UUID.class),
+                resultSet.getObject("cycle_id", UUID.class),
+                resultSet.getObject("source_stage_id", UUID.class),
+                resultSet.getObject("subject_id", UUID.class),
+                resultSet.getString("subject_name"),
+                resultSet.getInt("position"),
+                resultSet.getLong("target_seconds"),
+                resultSet.getLong("credited_seconds"));
     }
 }
