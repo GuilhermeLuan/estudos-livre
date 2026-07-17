@@ -16,6 +16,7 @@ import br.com.estudalivre.studycycle.service.StudyCreditDistributor;
 import br.com.estudalivre.studycycle.repository.StudyCycleRepository;
 import br.com.estudalivre.subject.service.ContentService;
 import br.com.estudalivre.subject.service.SubjectService;
+import br.com.estudalivre.review.service.ReviewService;
 import java.util.Optional;
 import java.util.UUID;
 import java.time.ZoneId;
@@ -32,6 +33,7 @@ public class StudySessionService {
     private final StudyCreditDistributor studyCreditDistributor;
     private final SubjectService subjectService;
     private final ContentService contentService;
+    private final ReviewService reviewService;
 
     public StudySessionService(
             StudySessionRepository studySessionRepository,
@@ -39,13 +41,15 @@ public class StudySessionService {
             StudyCycleRepository studyCycleRepository,
             StudyCreditDistributor studyCreditDistributor,
             SubjectService subjectService,
-            ContentService contentService) {
+            ContentService contentService,
+            ReviewService reviewService) {
         this.studySessionRepository = studySessionRepository;
         this.studyCycleService = studyCycleService;
         this.studyCycleRepository = studyCycleRepository;
         this.studyCreditDistributor = studyCreditDistributor;
         this.subjectService = subjectService;
         this.contentService = contentService;
+        this.reviewService = reviewService;
     }
 
     @Transactional
@@ -77,6 +81,11 @@ public class StudySessionService {
     public Optional<StudySessionResponse> current(UUID ownerId) {
         return studySessionRepository.findCurrentByOwnerId(ownerId)
                 .map(session -> StudySessionResponse.from(session, studySessionRepository.findCredits(session.id())));
+    }
+
+    @Transactional(readOnly = true)
+    public StudySessionResponse get(UUID ownerId, UUID sessionId) {
+        return findOwned(sessionId, ownerId);
     }
 
     @Transactional
@@ -146,13 +155,19 @@ public class StudySessionService {
     }
 
     @Transactional
-    public StudySessionResponse finish(UUID ownerId, UUID sessionId, FinishStudySessionRequest request) {
+    public StudySessionResponse finish(
+            UUID ownerId,
+            String timeZone,
+            UUID sessionId,
+            FinishStudySessionRequest request) {
         Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
                 request.questionsAttempted(), request.questionsCorrect());
         var state = studySessionRepository.findFinishStateForUpdate(sessionId, ownerId)
                 .orElseThrow(StudySessionNotFoundException::new);
         if (state.status().equals("FINISHED")) {
             if (state.effectiveSeconds().equals(request.effectiveSeconds())) {
+                completeReview(ownerId, sessionId, state);
+                ensureReviewPlan(ownerId, timeZone, sessionId, request, state);
                 return findOwned(sessionId, ownerId);
             }
             throw new StudySessionFinishConflictException();
@@ -170,9 +185,44 @@ public class StudySessionService {
         if (state.cycleRunId() != null) {
             applyCreditsToRun(
                     sessionId, state.cycleRunId(), state.subjectId(), request.effectiveSeconds());
+        } else if (state.origin().equals("REVIEW")) {
+            studyCycleRepository.findActiveByOwnerId(ownerId)
+                    .flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()))
+                    .ifPresent(run -> applyCreditsToRun(
+                            sessionId, run.id(), state.subjectId(), request.effectiveSeconds()));
         }
         exerciseResult.ifPresent(result -> studySessionRepository.saveExerciseResult(sessionId, result));
+        completeReview(ownerId, sessionId, state);
+        ensureReviewPlan(ownerId, timeZone, sessionId, request, state);
         return findOwned(sessionId, ownerId);
+    }
+
+    private void ensureReviewPlan(
+            UUID ownerId,
+            String timeZone,
+            UUID sessionId,
+            FinishStudySessionRequest request,
+            StudySessionRepository.FinishState state) {
+        if (state.origin().equals("REVIEW")
+                || !Boolean.TRUE.equals(request.scheduleReviews())
+                || state.contentId() == null) {
+            return;
+        }
+        reviewService.ensurePlan(
+                ownerId,
+                state.subjectId(),
+                state.contentId(),
+                sessionId,
+                state.startedAt().atZoneSameInstant(ZoneId.of(timeZone)).toLocalDate());
+    }
+
+    private void completeReview(
+            UUID ownerId,
+            UUID sessionId,
+            StudySessionRepository.FinishState state) {
+        if (state.origin().equals("REVIEW")) {
+            reviewService.complete(ownerId, state.reviewOccurrenceId(), sessionId);
+        }
     }
 
     @Transactional

@@ -50,6 +50,7 @@ import {
   ExerciseSummary,
   updateExerciseResult
 } from "./study-session-api";
+import { listReviews, ReviewOccurrence, ReviewTiming, startReview } from "./review-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -101,10 +102,19 @@ function CyclesIcon() {
   );
 }
 
+function ReviewsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 3.5h12v17l-6-3-6 3v-17Z" />
+      <path d="M9 8h6M9 12h4" />
+    </svg>
+  );
+}
+
 function AppShell({ children, authenticated, activeSection, topbarMeta = "Identidade e acesso" }: {
   children: ReactNode;
   authenticated: boolean;
-  activeSection?: "subjects" | "cycles" | "account";
+  activeSection?: "subjects" | "cycles" | "reviews" | "account";
   topbarMeta?: string;
 }) {
   return (
@@ -118,6 +128,7 @@ function AppShell({ children, authenticated, activeSection, topbarMeta = "Identi
             <>
               <Link className={`nav-item ${activeSection === "subjects" ? "active" : ""}`} aria-current={activeSection === "subjects" ? "page" : undefined} to="/materias"><SubjectsIcon />Matérias</Link>
               <Link className={`nav-item ${activeSection === "cycles" ? "active" : ""}`} aria-current={activeSection === "cycles" ? "page" : undefined} to="/ciclos"><CyclesIcon />Ciclos</Link>
+              <Link className={`nav-item ${activeSection === "reviews" ? "active" : ""}`} aria-current={activeSection === "reviews" ? "page" : undefined} to="/revisoes"><ReviewsIcon />Revisões</Link>
               <Link className={`nav-item ${activeSection === "account" ? "active" : ""}`} aria-current={activeSection === "account" ? "page" : undefined} to="/conta"><LockIcon />Conta</Link>
             </>
           ) : (
@@ -144,6 +155,7 @@ function AppShell({ children, authenticated, activeSection, topbarMeta = "Identi
           <nav className="mobile-nav" aria-label="Navegação móvel">
             <Link className={activeSection === "subjects" ? "active" : ""} aria-current={activeSection === "subjects" ? "page" : undefined} to="/materias"><SubjectsIcon />Matérias</Link>
             <Link className={activeSection === "cycles" ? "active" : ""} aria-current={activeSection === "cycles" ? "page" : undefined} to="/ciclos"><CyclesIcon />Ciclos</Link>
+            <Link className={activeSection === "reviews" ? "active" : ""} aria-current={activeSection === "reviews" ? "page" : undefined} to="/revisoes"><ReviewsIcon />Revisões</Link>
             <Link className={activeSection === "account" ? "active" : ""} aria-current={activeSection === "account" ? "page" : undefined} to="/conta"><LockIcon />Conta</Link>
           </nav>
         )}
@@ -442,7 +454,7 @@ function StudySessionDesk({ session, seconds, pending, error, onPause, onResume,
     >
       <span className="study-session-mark" aria-hidden="true">{session.status === "ACTIVE" ? "▶" : "Ⅱ"}</span>
       <div className="study-session-copy">
-        <span className="card-kicker">{session.origin === "CYCLE" ? `Etapa ${String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}` : "Sessão livre"}</span>
+        <span className="card-kicker">{session.origin === "CYCLE" ? `Etapa ${String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}` : session.origin === "REVIEW" ? "Revisão" : "Sessão livre"}</span>
         <h2>{session.subject.name}</h2>
         <p>{session.content?.name ?? "Sem conteúdo específico"}</p>
       </div>
@@ -474,11 +486,16 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
   error?: string;
   onDurationChange: (duration: string) => void;
   onCancel: () => void;
-  onSubmit: (effectiveSeconds: number, exerciseResult?: ExerciseResultInput) => void;
+  onSubmit: (
+    effectiveSeconds: number,
+    exerciseResult: ExerciseResultInput | undefined,
+    scheduleReviews: boolean
+  ) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [questionsAttemptedInput, setQuestionsAttemptedInput] = useState("");
   const [questionsCorrectInput, setQuestionsCorrectInput] = useState("");
+  const [scheduleReviews, setScheduleReviews] = useState(true);
   const effectiveSeconds = parseTimer(effectiveDuration);
   const questionsAttempted = questionsAttemptedInput === "" ? null : Number(questionsAttemptedInput);
   const questionsCorrect = questionsCorrectInput === "" ? null : Number(questionsCorrectInput);
@@ -513,7 +530,7 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
 
   return (
     <dialog className="study-session-dialog finish-session-dialog" ref={dialogRef} aria-labelledby="finish-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
-      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds !== null && validExerciseResult) onSubmit(effectiveSeconds, exerciseResult); }}>
+      <form className="study-session-dialog-panel" onSubmit={(event) => { event.preventDefault(); if (effectiveSeconds !== null && validExerciseResult) onSubmit(effectiveSeconds, exerciseResult, session.origin !== "REVIEW" && Boolean(session.content) && scheduleReviews); }}>
         <header>
           <span className="study-session-dialog-mark" aria-hidden="true">✓</span>
           <div>
@@ -558,12 +575,28 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
               <output>{exerciseResult!.questionsCorrect} de {exerciseResult!.questionsAttempted} · {accuracyPercentage.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% de acerto</output>
             )}
           </fieldset>
+          {session.content && session.origin !== "REVIEW" && (
+            <label className="finish-session-review-option">
+              <input
+                type="checkbox"
+                aria-label="Agendar revisões deste conteúdo"
+                aria-describedby="schedule-reviews-hint"
+                checked={scheduleReviews}
+                onChange={(event) => setScheduleReviews(event.target.checked)}
+                disabled={pending}
+              />
+              <span>
+                <strong>Agendar revisões deste conteúdo</strong>
+                <small id="schedule-reviews-hint">Cria lembretes em 1, 7, 30, 60, 90 e 120 dias, ancorados neste estudo.</small>
+              </span>
+            </label>
+          )}
           <div className="finish-session-credit">
-            <span className="finish-session-credit-mark" aria-hidden="true">{String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}</span>
+            <span className="finish-session-credit-mark" aria-hidden="true">{session.origin === "REVIEW" ? "R" : String(session.cycle?.stagePosition ?? 1).padStart(2, "0")}</span>
             <div>
-              <span>{session.cycle ? "Crédito previsto" : "Registro da sessão"}</span>
-              <strong>{session.cycle ? `Etapa ${String(session.cycle.stagePosition).padStart(2, "0")} · ${session.subject.name}` : `Sessão livre · ${session.subject.name}`}</strong>
-              <small>{session.cycle ? "O tempo será aplicado até o restante da etapa desta matéria." : "O tempo ficará nas métricas, sem alterar uma etapa do ciclo."}</small>
+              <span>{session.origin === "REVIEW" ? "Crédito ao ciclo ativo" : session.cycle ? "Crédito previsto" : "Registro da sessão"}</span>
+              <strong>{session.origin === "REVIEW" ? `Revisão · ${session.subject.name}` : session.cycle ? `Etapa ${String(session.cycle.stagePosition).padStart(2, "0")} · ${session.subject.name}` : `Sessão livre · ${session.subject.name}`}</strong>
+              <small>{session.origin === "REVIEW" ? "O tempo será distribuído nas etapas desta matéria do ciclo ativo, se houver." : session.cycle ? "O tempo será aplicado até o restante da etapa desta matéria." : "O tempo ficará nas métricas, sem alterar uma etapa do ciclo."}</small>
             </div>
           </div>
         </div>
@@ -1134,8 +1167,8 @@ function ProtectedStudyCyclesPage() {
     onSuccess: (updated) => queryClient.setQueryData(["study-session", "current"], updated)
   });
   const finishSessionMutation = useMutation({
-    mutationFn: ({ session, effectiveSeconds, exerciseResult }: { session: StudySession; effectiveSeconds: number; exerciseResult?: ExerciseResultInput }) =>
-      finishStudySession(session.id, effectiveSeconds, session.version, exerciseResult),
+    mutationFn: ({ session, effectiveSeconds, exerciseResult, scheduleReviews }: { session: StudySession; effectiveSeconds: number; exerciseResult?: ExerciseResultInput; scheduleReviews: boolean }) =>
+      finishStudySession(session.id, effectiveSeconds, session.version, exerciseResult, scheduleReviews),
     onSuccess: (finished) => {
       queryClient.setQueryData(["study-session", "current"], null);
       queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) => [
@@ -1145,6 +1178,7 @@ function ProtectedStudyCyclesPage() {
       void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
       void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews"] });
       setFinishingSession(undefined);
       setEffectiveDuration("");
       setFinishMeasuredSeconds(0);
@@ -1875,7 +1909,7 @@ function ProtectedStudyCyclesPage() {
               : undefined}
             onDurationChange={setEffectiveDuration}
             onCancel={closeFinishSession}
-            onSubmit={(effectiveSeconds, exerciseResult) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds, exerciseResult })}
+            onSubmit={(effectiveSeconds, exerciseResult, scheduleReviews) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds, exerciseResult, scheduleReviews })}
           />
         )}
         {editingExerciseSession && (
@@ -2358,6 +2392,178 @@ function ContentRow({ content }: { content: StudyContent }) {
   );
 }
 
+function formatCivilDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "numeric",
+    month: "short",
+    year: "numeric"
+  }).format(new Date(year, month - 1, day));
+}
+
+function ReviewCard({ review, onStart, pending, blocked }: {
+  review: ReviewOccurrence;
+  onStart: (review: ReviewOccurrence) => void;
+  pending: boolean;
+  blocked: boolean;
+}) {
+  const timingCopy: Record<ReviewTiming, string> = {
+    OVERDUE: "Revisão atrasada",
+    TODAY: "Revisar hoje",
+    FUTURE: "Revisão futura"
+  };
+  return (
+    <article className={`review-card is-${review.timing.toLowerCase()}`}>
+      <span className="review-bookmark" aria-hidden="true">D+{review.intervalDays}</span>
+      <div className="review-card-copy">
+        <span className="card-kicker">{review.subjectName}</span>
+        <h3>{review.contentName}</h3>
+        <small>Estudo-base em {formatCivilDate(review.initialStudyDate)}</small>
+      </div>
+      <div className="review-card-controls">
+        <div className="review-card-date">
+          <span>{timingCopy[review.timing]}</span>
+          <time dateTime={review.dueDate}>{formatCivilDate(review.dueDate)}</time>
+        </div>
+        {review.timing !== "FUTURE" && (
+          <button
+            className={review.timing === "TODAY" ? "primary-button review-start-button" : "secondary-button review-start-button"}
+            type="button"
+            aria-label={`Iniciar revisão de ${review.contentName}`}
+            onClick={() => onStart(review)}
+            disabled={pending || blocked}
+          >
+            {pending ? "Iniciando…" : blocked ? "Sessão em andamento" : "Iniciar revisão"}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ReviewGroup({ title, description, reviews, timing, onStart, pendingId, blocked }: {
+  title: string;
+  description: string;
+  reviews: ReviewOccurrence[];
+  timing: ReviewTiming;
+  onStart: (review: ReviewOccurrence) => void;
+  pendingId?: string;
+  blocked: boolean;
+}) {
+  if (reviews.length === 0) return null;
+  return (
+    <section className={`review-group is-${timing.toLowerCase()}`} aria-label={title}>
+      <header>
+        <div>
+          <span className="card-kicker">{description}</span>
+          <h2>{title}</h2>
+        </div>
+        <span className="review-group-count">{reviews.length}</span>
+      </header>
+      <div className="review-list">
+        {reviews.map((review) => (
+          <ReviewCard
+            key={review.occurrenceId}
+            review={review}
+            onStart={onStart}
+            pending={pendingId === review.occurrenceId}
+            blocked={blocked}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProtectedReviewsPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
+  const reviewQueue = useQuery({
+    queryKey: ["reviews"],
+    queryFn: listReviews,
+    enabled: auth.data?.state === "authenticated"
+  });
+  const currentSession = useQuery({
+    queryKey: ["study-session", "current"],
+    queryFn: loadCurrentStudySession,
+    enabled: auth.data?.state === "authenticated",
+    staleTime: 5_000
+  });
+  const startReviewMutation = useMutation({
+    mutationFn: (review: ReviewOccurrence) => startReview(review.occurrenceId),
+    onSuccess: (started) => {
+      queryClient.setQueryData(["study-session", "current"], started);
+      navigate("/ciclos");
+    }
+  });
+
+  if (auth.isPending) {
+    return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
+  }
+  if (auth.isError || auth.data?.state !== "authenticated") {
+    return <Navigate to="/" replace />;
+  }
+
+  const reviews = reviewQueue.data ?? [];
+  const today = reviews.filter((review) => review.timing === "TODAY");
+  const overdue = reviews.filter((review) => review.timing === "OVERDUE");
+  const future = reviews.filter((review) => review.timing === "FUTURE");
+  const reviewActionsBlocked = currentSession.isPending || Boolean(currentSession.data);
+
+  return (
+    <AppShell authenticated activeSection="reviews" topbarMeta="Memória em dia">
+      <main className="content reviews-content">
+        <div className="page-heading reviews-heading">
+          <div>
+            <span className="eyebrow">Seu horizonte de memória</span>
+            <h1>Revisões</h1>
+            <p>Retome cada conteúdo no dia certo, preservando a data do primeiro estudo.</p>
+          </div>
+          <div className="reviews-today-summary" aria-label={`${today.length} revisões para hoje`}>
+            <span>Hoje</span>
+            <strong>{String(today.length).padStart(2, "0")}</strong>
+          </div>
+        </div>
+
+        {reviewQueue.isPending && <p className="review-queue-state">Organizando sua fila de revisões…</p>}
+        {reviewQueue.isError && (
+          <div className="review-queue-state is-error" role="alert">
+            <p>Não foi possível consultar suas revisões.</p>
+            <button className="secondary-button" type="button" onClick={() => void reviewQueue.refetch()}>Tentar novamente</button>
+          </div>
+        )}
+        {startReviewMutation.isError && (
+          <p className="review-start-error" role="alert">
+            {startReviewMutation.error instanceof ApiError
+              ? startReviewMutation.error.message
+              : "Não foi possível iniciar esta revisão."}
+          </p>
+        )}
+        {currentSession.data && reviews.some((review) => review.timing !== "FUTURE") && (
+          <p className="review-session-notice">Conclua a sessão em andamento antes de iniciar uma revisão.</p>
+        )}
+        {!reviewQueue.isPending && !reviewQueue.isError && reviews.length === 0 && (
+          <section className="review-empty" aria-label="Fila de revisões vazia">
+            <span className="review-empty-bookmark" aria-hidden="true">✓</span>
+            <div>
+              <h2>Nenhuma revisão agendada</h2>
+              <p>Finalize uma sessão com conteúdo e mantenha a opção de revisões marcada.</p>
+            </div>
+          </section>
+        )}
+        {!reviewQueue.isPending && !reviewQueue.isError && reviews.length > 0 && (
+          <div className="review-groups">
+            <ReviewGroup title="Revisões de hoje" description="A prioridade do dia" reviews={today} timing="TODAY" onStart={(review) => startReviewMutation.mutate(review)} pendingId={startReviewMutation.isPending ? startReviewMutation.variables?.occurrenceId : undefined} blocked={reviewActionsBlocked} />
+            <ReviewGroup title="Revisões atrasadas" description="Retome sem deslocar o plano" reviews={overdue} timing="OVERDUE" onStart={(review) => startReviewMutation.mutate(review)} pendingId={startReviewMutation.isPending ? startReviewMutation.variables?.occurrenceId : undefined} blocked={reviewActionsBlocked} />
+            <ReviewGroup title="Próximas revisões" description="Seu horizonte" reviews={future} timing="FUTURE" onStart={(review) => startReviewMutation.mutate(review)} pendingId={startReviewMutation.isPending ? startReviewMutation.variables?.occurrenceId : undefined} blocked={reviewActionsBlocked} />
+          </div>
+        )}
+      </main>
+    </AppShell>
+  );
+}
+
 function ProtectedAccountPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -2703,6 +2909,7 @@ export function App() {
         <Route path="/materias" element={<ProtectedSubjectsPage />} />
         <Route path="/materias/:subjectId/conteudos" element={<ProtectedContentsPage />} />
         <Route path="/ciclos" element={<ProtectedStudyCyclesPage />} />
+        <Route path="/revisoes" element={<ProtectedReviewsPage />} />
         <Route path="/conta" element={<ProtectedAccountPage />} />
         <Route path="/redefinir-senha" element={<PasswordResetPage />} />
       </Routes>

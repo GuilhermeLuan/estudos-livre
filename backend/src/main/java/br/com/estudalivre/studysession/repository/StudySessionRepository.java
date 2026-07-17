@@ -135,6 +135,27 @@ public class StudySessionRepository {
                 .update();
     }
 
+    public void createReview(
+            UUID id,
+            UUID ownerId,
+            UUID subjectId,
+            UUID contentId,
+            UUID reviewOccurrenceId) {
+        jdbcClient.sql("""
+                        INSERT INTO study_session (
+                            id, owner_id, origin, subject_id, content_id, review_occurrence_id
+                        ) VALUES (
+                            :id, :ownerId, 'REVIEW', :subjectId, :contentId, :reviewOccurrenceId
+                        )
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .param("subjectId", subjectId)
+                .param("contentId", contentId)
+                .param("reviewOccurrenceId", reviewOccurrenceId)
+                .update();
+    }
+
     public Optional<StudySession> findCurrentByOwnerId(UUID ownerId) {
         return jdbcClient.sql(SESSION_PROJECTION + """
                         WHERE study_session.owner_id = :ownerId
@@ -182,8 +203,9 @@ public class StudySessionRepository {
 
     public Optional<FinishState> findFinishStateForUpdate(UUID id, UUID ownerId) {
         return jdbcClient.sql("""
-                        SELECT status, origin, subject_id, cycle_run_id,
-                               effective_seconds, version
+                        SELECT status, origin, subject_id, content_id, cycle_run_id,
+                               review_occurrence_id,
+                               started_at, effective_seconds, version
                         FROM study_session
                         WHERE id = :id AND owner_id = :ownerId
                         FOR UPDATE
@@ -194,7 +216,10 @@ public class StudySessionRepository {
                         resultSet.getString("status"),
                         resultSet.getString("origin"),
                         resultSet.getObject("subject_id", UUID.class),
+                        resultSet.getObject("content_id", UUID.class),
                         resultSet.getObject("cycle_run_id", UUID.class),
+                        resultSet.getObject("review_occurrence_id", UUID.class),
+                        resultSet.getObject("started_at", OffsetDateTime.class),
                         resultSet.getObject("effective_seconds", Long.class),
                         resultSet.getInt("version")))
                 .optional();
@@ -389,7 +414,10 @@ public class StudySessionRepository {
             String status,
             String origin,
             UUID subjectId,
+            UUID contentId,
             UUID cycleRunId,
+            UUID reviewOccurrenceId,
+            OffsetDateTime startedAt,
             Long effectiveSeconds,
             int version) {
     }
