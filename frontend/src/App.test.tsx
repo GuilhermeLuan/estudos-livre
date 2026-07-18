@@ -1049,6 +1049,262 @@ describe("authentication journey", () => {
     expect(within(future).queryByRole("button", { name: /Iniciar revisão/ })).not.toBeInTheDocument();
   });
 
+  it("lists active and canceled review plans with their history counts", async () => {
+    window.history.pushState({}, "", "/revisoes/planos");
+    const plans = [
+      {
+        id: "plan-active",
+        status: "ACTIVE",
+        version: 2,
+        subjectName: "Direito Constitucional",
+        contentName: "Direitos fundamentais",
+        initialStudyDate: "2026-07-01",
+        scheduledCount: 3,
+        completedCount: 1,
+        skippedCount: 2,
+        canceledCount: 0
+      },
+      {
+        id: "plan-canceled",
+        status: "CANCELED",
+        version: 1,
+        subjectName: "Língua Portuguesa",
+        contentName: "Concordância verbal",
+        initialStudyDate: "2026-06-10",
+        scheduledCount: 0,
+        completedCount: 1,
+        skippedCount: 0,
+        canceledCount: 5
+      }
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/review-plans") return jsonResponse(plans);
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Planos de revisão" })).toBeVisible();
+    const active = await screen.findByRole("article", { name: "Plano de Direitos fundamentais" });
+    expect(within(active).getByText("Plano ativo")).toBeVisible();
+    expect(within(active).getByText("3 futuras")).toBeVisible();
+    expect(within(active).getByText("1 concluída")).toBeVisible();
+    expect(within(active).getByText("2 ignoradas")).toBeVisible();
+    expect(within(active).getByRole("link", { name: "Gerenciar Direitos fundamentais" }))
+      .toHaveAttribute("href", "/revisoes/planos/plan-active");
+    const canceled = screen.getByRole("article", { name: "Plano de Concordância verbal" });
+    expect(within(canceled).getByText("Plano cancelado")).toBeVisible();
+    expect(within(canceled).getByText("5 canceladas")).toBeVisible();
+  });
+
+  it("preserves review history while rescheduling only future occurrences", async () => {
+    window.history.pushState({}, "", "/revisoes/planos/plan-active");
+    document.cookie = "XSRF-TOKEN=review-plan-token; Path=/";
+    const plan = {
+      id: "plan-active",
+      status: "ACTIVE",
+      version: 4,
+      subject: { id: "subject-1", name: "Direito Constitucional" },
+      content: { id: "content-1", name: "Direitos fundamentais" },
+      initialStudyDate: "2026-06-01",
+      occurrences: [
+        { id: "occ-completed", intervalDays: 1, dueDate: "2026-06-02", status: "COMPLETED", resolvedAt: "2026-06-02T12:00:00Z", inProgress: false },
+        { id: "occ-skipped", intervalDays: 7, dueDate: "2026-06-08", status: "SKIPPED", resolvedAt: "2026-06-09T12:00:00Z", inProgress: false },
+        { id: "occ-overdue", intervalDays: 15, dueDate: "2026-06-16", status: "SCHEDULED", resolvedAt: null, inProgress: false },
+        { id: "occ-future", intervalDays: 30, dueDate: "2027-01-31", status: "SCHEDULED", resolvedAt: null, inProgress: false }
+      ]
+    };
+    const updatedPlan = {
+      ...plan,
+      version: 5,
+      occurrences: plan.occurrences.map((occurrence) =>
+        occurrence.id === "occ-future" ? { ...occurrence, dueDate: "2027-02-02" } : occurrence)
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/review-plans/plan-active" && (!init?.method || init.method === "GET")) return jsonResponse(plan);
+      if (url === "/api/review-plans/plan-active/schedule" && init?.method === "PUT") return jsonResponse(updatedPlan);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Direitos fundamentais" })).toBeVisible();
+    expect(screen.getByText("Concluída")).toBeVisible();
+    expect(screen.getByText("Ignorada")).toBeVisible();
+    expect(screen.getByText("Atrasada")).toBeVisible();
+    expect(screen.getByLabelText("Data da revisão D+1")).toBeDisabled();
+    expect(screen.getByLabelText("Data da revisão D+7")).toBeDisabled();
+    expect(screen.getByLabelText("Data da revisão D+15")).toBeDisabled();
+    const futureDate = screen.getByLabelText("Data da revisão D+30");
+    expect(futureDate).toBeEnabled();
+    fireEvent.change(futureDate, { target: { value: "2027-02-02" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar novas datas" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/review-plans/plan-active/schedule",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: 4,
+          occurrences: [{ occurrenceId: "occ-future", dueDate: "2027-02-02" }]
+        })
+      })
+    ));
+    expect(await screen.findByText("Novas datas salvas.")).toBeVisible();
+    expect(screen.getByLabelText("Data da revisão D+30")).toHaveValue("2027-02-02");
+  });
+
+  it("explains the impact before canceling a review plan", async () => {
+    window.history.pushState({}, "", "/revisoes/planos/plan-active");
+    document.cookie = "XSRF-TOKEN=review-plan-token; Path=/";
+    const plan = {
+      id: "plan-active",
+      status: "ACTIVE",
+      version: 4,
+      subject: { id: "subject-1", name: "Direito Constitucional" },
+      content: { id: "content-1", name: "Direitos fundamentais" },
+      initialStudyDate: "2026-06-01",
+      occurrences: [
+        { id: "occ-completed", intervalDays: 1, dueDate: "2026-06-02", status: "COMPLETED", resolvedAt: "2026-06-02T12:00:00Z", inProgress: false },
+        { id: "occ-overdue", intervalDays: 15, dueDate: "2026-06-16", status: "SCHEDULED", resolvedAt: null, inProgress: false },
+        { id: "occ-future", intervalDays: 30, dueDate: "2027-01-31", status: "SCHEDULED", resolvedAt: null, inProgress: false }
+      ]
+    };
+    const canceledPlan = {
+      ...plan,
+      status: "CANCELED",
+      version: 5,
+      occurrences: plan.occurrences.map((occurrence) =>
+        occurrence.status === "SCHEDULED" ? { ...occurrence, status: "CANCELED" } : occurrence)
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/review-plans/plan-active" && (!init?.method || init.method === "GET")) return jsonResponse(plan);
+      if (url === "/api/review-plans/plan-active/cancel" && init?.method === "POST") return jsonResponse(canceledPlan);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancelar plano" }));
+    const dialog = screen.getByRole("dialog", { name: "Cancelar plano de revisão?" });
+    expect(within(dialog).getByText("2 revisões pendentes serão canceladas.")).toBeVisible();
+    expect(within(dialog).getByText(/A revisão já concluída continuará no histórico/)).toBeVisible();
+    const actions = within(dialog).getAllByRole("button");
+    expect(actions.map((button) => button.textContent)).toEqual(["Manter plano", "Confirmar cancelamento"]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirmar cancelamento" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/review-plans/plan-active/cancel",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ expectedVersion: 4 }) })
+    ));
+    expect(await screen.findByText("Plano cancelado")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Salvar novas datas" })).not.toBeInTheDocument();
+  });
+
+  it("reactivates a canceled review plan without replacing its history", async () => {
+    window.history.pushState({}, "", "/revisoes/planos/plan-canceled");
+    document.cookie = "XSRF-TOKEN=review-plan-token; Path=/";
+    const plan = {
+      id: "plan-canceled",
+      status: "CANCELED",
+      version: 5,
+      subject: { id: "subject-1", name: "Direito Constitucional" },
+      content: { id: "content-1", name: "Direitos fundamentais" },
+      initialStudyDate: "2026-06-01",
+      occurrences: [
+        { id: "occ-completed", intervalDays: 1, dueDate: "2026-06-02", status: "COMPLETED", resolvedAt: "2026-06-02T12:00:00Z", inProgress: false },
+        { id: "occ-canceled", intervalDays: 30, dueDate: "2027-01-31", status: "CANCELED", resolvedAt: null, inProgress: false }
+      ]
+    };
+    const reactivatedPlan = {
+      ...plan,
+      status: "ACTIVE",
+      version: 6,
+      occurrences: plan.occurrences.map((occurrence) =>
+        occurrence.status === "CANCELED" ? { ...occurrence, status: "SCHEDULED" } : occurrence)
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/review-plans/plan-canceled" && (!init?.method || init.method === "GET")) return jsonResponse(plan);
+      if (url === "/api/review-plans/plan-canceled/reactivate" && init?.method === "POST") return jsonResponse(reactivatedPlan);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Reativar plano" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/review-plans/plan-canceled/reactivate",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ expectedVersion: 5 }) })
+    ));
+    expect(await screen.findByText("Plano ativo")).toBeVisible();
+    expect(screen.getByText("Agendada")).toBeVisible();
+    expect(screen.getByText("Concluída")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Cancelar plano" })).toBeEnabled();
+  });
+
+  it("offers the latest plan after a concurrent schedule change", async () => {
+    window.history.pushState({}, "", "/revisoes/planos/plan-active");
+    document.cookie = "XSRF-TOKEN=review-plan-token; Path=/";
+    const plan = {
+      id: "plan-active",
+      status: "ACTIVE",
+      version: 4,
+      subject: { id: "subject-1", name: "Direito Constitucional" },
+      content: { id: "content-1", name: "Direitos fundamentais" },
+      initialStudyDate: "2026-06-01",
+      occurrences: [
+        { id: "occ-future", intervalDays: 30, dueDate: "2027-01-31", status: "SCHEDULED", resolvedAt: null, inProgress: false }
+      ]
+    };
+    const latestPlan = {
+      ...plan,
+      version: 5,
+      occurrences: [{ ...plan.occurrences[0], dueDate: "2027-02-10" }]
+    };
+    let detailReads = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/review-plans/plan-active" && (!init?.method || init.method === "GET")) {
+        detailReads += 1;
+        return jsonResponse(detailReads === 1 ? plan : latestPlan);
+      }
+      if (url === "/api/review-plans/plan-active/schedule" && init?.method === "PUT") {
+        return jsonResponse({ detail: "Este plano foi alterado em outra sessão." }, 409);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+
+    const futureDate = await screen.findByLabelText("Data da revisão D+30");
+    fireEvent.change(futureDate, { target: { value: "2027-02-02" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar novas datas" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Este plano foi alterado em outra sessão.");
+    fireEvent.click(screen.getByRole("button", { name: "Carregar versão mais recente" }));
+
+    await waitFor(() => expect(detailReads).toBe(2));
+    await waitFor(() => expect(screen.getByLabelText("Data da revisão D+30")).toHaveValue("2027-02-10"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("starts a due review and carries its locked context to the study desk", async () => {
     window.history.pushState({}, "", "/revisoes");
     document.cookie = "XSRF-TOKEN=review-token; Path=/";

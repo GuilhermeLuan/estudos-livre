@@ -1,6 +1,8 @@
 package br.com.estudalivre.review.controller;
 
 import br.com.estudalivre.review.service.ReviewOccurrenceNotAvailableException;
+import br.com.estudalivre.review.service.ReviewPlanNotFoundException;
+import br.com.estudalivre.review.service.ReviewPlanConflictException;
 import br.com.estudalivre.studysession.service.OpenStudySessionAlreadyExistsException;
 import java.net.URI;
 import org.springframework.http.HttpStatus;
@@ -8,8 +10,26 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = ReviewController.class)
+@RestControllerAdvice(assignableTypes = {ReviewController.class, ReviewPlanController.class})
 public class ReviewExceptionHandler {
+
+    @ExceptionHandler(ReviewPlanNotFoundException.class)
+    ProblemDetail planNotFound(ReviewPlanNotFoundException exception) {
+        return problem(
+                HttpStatus.NOT_FOUND,
+                "Plano de revisão não encontrado",
+                "review-plan-not-found",
+                exception);
+    }
+
+    @ExceptionHandler(ReviewPlanConflictException.class)
+    ProblemDetail planConflict(ReviewPlanConflictException exception) {
+        return problem(
+                HttpStatus.CONFLICT,
+                "Plano de revisão desatualizado",
+                "review-plan-conflict",
+                exception);
+    }
 
     @ExceptionHandler(ReviewOccurrenceNotAvailableException.class)
     ProblemDetail occurrenceNotAvailable(ReviewOccurrenceNotAvailableException exception) {
