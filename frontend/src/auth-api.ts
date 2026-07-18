@@ -15,7 +15,11 @@ type ProblemDetails = {
 };
 
 export class ApiError extends Error {
-  constructor(message: string, readonly fieldErrors: Record<string, string> = {}) {
+  constructor(
+    message: string,
+    readonly fieldErrors: Record<string, string> = {},
+    readonly status?: number
+  ) {
     super(message);
   }
 }
@@ -48,7 +52,7 @@ export async function requireSuccess(response: Response, fallbackMessage: string
   if (response.headers.get("Content-Type")?.includes("json")) {
     problem = await response.json() as ProblemDetails;
   }
-  throw new ApiError(problem.detail ?? fallbackMessage, problem.errors);
+  throw new ApiError(problem.detail ?? fallbackMessage, problem.errors, response.status);
 }
 
 export async function loadAuthSnapshot(): Promise<AuthSnapshot> {
