@@ -8,7 +8,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SpaController {
 
-    @GetMapping({"/redefinir-senha", "/revisoes"})
+    @GetMapping({
+            "/redefinir-senha",
+            "/materias",
+            "/materias/{subjectId}/conteudos",
+            "/ciclos",
+            "/revisoes",
+            "/revisoes/planos",
+            "/revisoes/planos/{planId}",
+            "/conta"
+    })
     public String reactApplication() {
         return "forward:/index.html";
     }

@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import br.com.estudalivre.testing.IntegrationTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -25,9 +27,18 @@ class SpaRoutingIntegrationTest {
                 .andExpect(forwardedUrl("/index.html"));
     }
 
-    @Test
-    void directReviewsRouteLoadsTheReactApplication() throws Exception {
-        mockMvc.perform(get("/revisoes").with(user("pessoa@example.com")))
+    @ParameterizedTest(name = "direct route {0} loads the React application")
+    @ValueSource(strings = {
+            "/materias",
+            "/materias/subject-id/conteudos",
+            "/ciclos",
+            "/revisoes",
+            "/revisoes/planos",
+            "/revisoes/planos/plan-id",
+            "/conta"
+    })
+    void directAuthenticatedRoutesLoadTheReactApplication(String route) throws Exception {
+        mockMvc.perform(get(route).with(user("pessoa@example.com")))
                 .andExpect(status().isOk())
                 .andExpect(cookie().exists("XSRF-TOKEN"))
                 .andExpect(forwardedUrl("/index.html"));
