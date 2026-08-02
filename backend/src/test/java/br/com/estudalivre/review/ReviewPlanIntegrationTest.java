@@ -1,9 +1,12 @@
 package br.com.estudalivre.review;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.equalTo;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -97,6 +100,319 @@ class ReviewPlanIntegrationTest {
                 .andExpect(jsonPath("$[3].dueDate").value("2027-03-01"))
                 .andExpect(jsonPath("$[4].dueDate").value("2027-03-31"))
                 .andExpect(jsonPath("$[5].dueDate").value("2027-04-30"));
+    }
+
+    @Test
+    void ownerCanOpenTheFullReviewPlanCreatedFromTheQueue() throws Exception {
+        IdentityPrincipal principal = createUser("plano-completo@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Direito Tributário");
+        UUID contentId = createContent(principal, subjectId, "Crédito tributário");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+
+        mockMvc.perform(get("/api/review-plans/{planId}", planId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(planId.toString()))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.subject.name").value("Direito Tributário"))
+                .andExpect(jsonPath("$.content.name").value("Crédito tributário"))
+                .andExpect(jsonPath("$.occurrences.length()").value(6))
+                .andExpect(jsonPath("$.occurrences[0].intervalDays").value(1))
+                .andExpect(jsonPath("$.occurrences[0].status").value("SCHEDULED"))
+                .andExpect(jsonPath("$.occurrences[5].intervalDays").value(120));
+    }
+
+    @Test
+    void ownerCanListReviewPlansWithMaintenanceCounts() throws Exception {
+        IdentityPrincipal principal = createUser("lista-planos@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Contabilidade Geral");
+        UUID contentId = createContent(principal, subjectId, "Demonstrações contábeis");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+
+        mockMvc.perform(get("/api/review-plans").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].status").value("ACTIVE"))
+                .andExpect(jsonPath("$[0].version").value(0))
+                .andExpect(jsonPath("$[0].subjectName").value("Contabilidade Geral"))
+                .andExpect(jsonPath("$[0].contentName").value("Demonstrações contábeis"))
+                .andExpect(jsonPath("$[0].scheduledCount").value(6))
+                .andExpect(jsonPath("$[0].completedCount").value(0))
+                .andExpect(jsonPath("$[0].skippedCount").value(0))
+                .andExpect(jsonPath("$[0].canceledCount").value(0));
+    }
+
+    @Test
+    void ownerCanRescheduleAFutureOccurrenceUsingTheCurrentPlanVersion() throws Exception {
+        IdentityPrincipal principal = createUser("reagendamento@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Processo Civil");
+        UUID contentId = createContent(principal, subjectId, "Recursos");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+        UUID occurrenceId = UUID.fromString(JsonPath.read(queue, "$[0].occurrenceId"));
+        LocalDate newDueDate = LocalDate.now(ZoneId.of(principal.timeZone())).plusDays(3);
+
+        mockMvc.perform(withSpaCsrf(put("/api/review-plans/{planId}/schedule", planId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion":0,
+                                  "occurrences":[
+                                    {"occurrenceId":"%s","dueDate":"%s"}
+                                  ]
+                                }
+                                """.formatted(occurrenceId, newDueDate))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.occurrences[0].dueDate").value(newDueDate.toString()));
+
+        mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.occurrenceId == '%s')].dueDate".formatted(occurrenceId))
+                        .value(newDueDate.toString()));
+    }
+
+    @Test
+    void cancelingAPlanRemovesOnlyItsPendingOccurrencesFromTheQueue() throws Exception {
+        IdentityPrincipal principal = createUser("cancelamento@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Direito Penal");
+        UUID contentId = createContent(principal, subjectId, "Teoria do crime");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+
+        mockMvc.perform(withSpaCsrf(post("/api/review-plans/{planId}/cancel", planId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":0}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CANCELED"))
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.occurrences[*].status").value(everyItem(equalTo("CANCELED"))));
+
+        mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        mockMvc.perform(get("/api/review-plans").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("CANCELED"))
+                .andExpect(jsonPath("$[0].canceledCount").value(6));
+    }
+
+    @Test
+    void reactivatingAPlanRestoresCanceledOccurrencesWithoutDuplicatingThem() throws Exception {
+        IdentityPrincipal principal = createUser("reativacao@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Informática");
+        UUID contentId = createContent(principal, subjectId, "Segurança da informação");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+        List<String> originalOccurrenceIds = JsonPath.read(queue, "$[*].occurrenceId");
+        mockMvc.perform(withSpaCsrf(post("/api/review-plans/{planId}/cancel", planId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":0}")))
+                .andExpect(status().isOk());
+
+        String reactivated = mockMvc.perform(withSpaCsrf(post("/api/review-plans/{planId}/reactivate", planId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":1}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.occurrences.length()").value(6))
+                .andExpect(jsonPath("$.occurrences[*].status").value(everyItem(equalTo("SCHEDULED"))))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertThat(JsonPath.<List<String>>read(reactivated, "$.occurrences[*].id"))
+                .containsExactlyInAnyOrderElementsOf(originalOccurrenceIds);
+        mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(6));
+    }
+
+    @Test
+    void concurrentScheduleEditsReturnConflictInsteadOfLosingAnUpdate() throws Exception {
+        IdentityPrincipal principal = createUser("concorrencia-plano@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Direito Constitucional");
+        UUID contentId = createContent(principal, subjectId, "Poder constituinte");
+        finishSession(principal, startContentSession(principal, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+        UUID occurrenceId = UUID.fromString(JsonPath.read(queue, "$[0].occurrenceId"));
+        LocalDate today = LocalDate.now(ZoneId.of(principal.timeZone()));
+        LocalDate firstDate = today.plusDays(3);
+        LocalDate secondDate = today.plusDays(4);
+        Cookie csrfCookie = csrfCookie();
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+            List<Future<Integer>> responses = List.of(
+                    executor.submit(() -> rescheduleConcurrently(
+                            principal, planId, occurrenceId, firstDate, csrfCookie, ready, start)),
+                    executor.submit(() -> rescheduleConcurrently(
+                            principal, planId, occurrenceId, secondDate, csrfCookie, ready, start)));
+
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(List.of(
+                    responses.get(0).get(10, TimeUnit.SECONDS),
+                    responses.get(1).get(10, TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(200, 409);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+
+        String detail = mockMvc.perform(get("/api/review-plans/{planId}", planId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(JsonPath.<String>read(detail, "$.occurrences[0].dueDate"))
+                .isIn(firstDate.toString(), secondDate.toString());
+    }
+
+    @Test
+    void bulkEditingNeverChangesCompletedOrSkippedOccurrences() throws Exception {
+        IdentityPrincipal principal = createUser("historico-imutavel@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(principal, "Administração Financeira");
+        UUID contentId = createContent(principal, subjectId, "Orçamento público");
+        UUID sourceSessionId = startContentSession(principal, subjectId, contentId);
+        jdbcTemplate.update(
+                "UPDATE study_session SET started_at = ? WHERE id = ?",
+                OffsetDateTime.now(ZoneId.of("UTC")).minusDays(10),
+                sourceSessionId);
+        finishSession(principal, sourceSessionId, true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+        UUID requestedOccurrenceId = UUID.fromString(JsonPath.read(queue, "$[0].occurrenceId"));
+        String reviewSession = mockMvc.perform(withSpaCsrf(post("/api/reviews/{occurrenceId}/start", requestedOccurrenceId)
+                        .with(user(principal))))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID reviewSessionId = UUID.fromString(JsonPath.read(reviewSession, "$.id"));
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", reviewSessionId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "effectiveSeconds":600,
+                                  "expectedVersion":0,
+                                  "scheduleReviews":false
+                                }
+                                """)))
+                .andExpect(status().isOk());
+        String detail = mockMvc.perform(get("/api/review-plans/{planId}", planId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID completedId = UUID.fromString(JsonPath.<List<String>>read(
+                detail, "$.occurrences[?(@.status == 'COMPLETED')].id").getFirst());
+        UUID futureId = UUID.fromString(JsonPath.<List<String>>read(
+                detail, "$.occurrences[?(@.status == 'SCHEDULED')].id").getFirst());
+        String originalFutureDate = JsonPath.<List<String>>read(
+                detail, "$.occurrences[?(@.id == '%s')].dueDate".formatted(futureId)).getFirst();
+        LocalDate today = LocalDate.now(ZoneId.of(principal.timeZone()));
+
+        mockMvc.perform(withSpaCsrf(put("/api/review-plans/{planId}/schedule", planId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion":0,
+                                  "occurrences":[
+                                    {"occurrenceId":"%s","dueDate":"%s"},
+                                    {"occurrenceId":"%s","dueDate":"%s"}
+                                  ]
+                                }
+                                """.formatted(
+                                        completedId, today.plusDays(40),
+                                        futureId, today.plusDays(45)))))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(get("/api/review-plans/{planId}", planId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.occurrences[0].status").value("SKIPPED"))
+                .andExpect(jsonPath("$.occurrences[1].status").value("COMPLETED"))
+                .andExpect(jsonPath(
+                        "$.occurrences[?(@.id == '%s')].dueDate".formatted(futureId))
+                        .value(originalFutureDate));
+    }
+
+    @Test
+    void anotherUserCannotReadOrChangeAReviewPlan() throws Exception {
+        IdentityPrincipal owner = createUser("dono-plano@example.com", "America/Sao_Paulo");
+        UUID subjectId = createSubject(owner, "Língua Portuguesa");
+        UUID contentId = createContent(owner, subjectId, "Regência verbal");
+        finishSession(owner, startContentSession(owner, subjectId, contentId), true);
+        String queue = mockMvc.perform(get("/api/reviews").with(user(owner)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        UUID planId = UUID.fromString(JsonPath.read(queue, "$[0].planId"));
+        UUID occurrenceId = UUID.fromString(JsonPath.read(queue, "$[0].occurrenceId"));
+        IdentityPrincipal other = createUser("intruso-plano@example.com", "America/Sao_Paulo");
+
+        mockMvc.perform(get("/api/review-plans/{planId}", planId).with(user(other)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(withSpaCsrf(put("/api/review-plans/{planId}/schedule", planId)
+                        .with(user(other))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion":0,
+                                  "occurrences":[
+                                    {"occurrenceId":"%s","dueDate":"%s"}
+                                  ]
+                                }
+                                """.formatted(occurrenceId, LocalDate.now().plusDays(5)))))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(withSpaCsrf(post("/api/review-plans/{planId}/cancel", planId)
+                        .with(user(other))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedVersion\":0}")))
+                .andExpect(status().isNotFound());
     }
 
     @Test
@@ -257,6 +573,34 @@ class ReviewPlanIntegrationTest {
                                   "scheduleReviews":true
                                 }
                                 """.formatted(expectedVersion)))
+                .andReturn()
+                .getResponse()
+                .getStatus();
+    }
+
+    private int rescheduleConcurrently(
+            IdentityPrincipal principal,
+            UUID planId,
+            UUID occurrenceId,
+            LocalDate dueDate,
+            Cookie csrfCookie,
+            CountDownLatch ready,
+            CountDownLatch start) throws Exception {
+        ready.countDown();
+        start.await(5, TimeUnit.SECONDS);
+        return mockMvc.perform(put("/api/review-plans/{planId}/schedule", planId)
+                        .with(user(principal))
+                        .cookie(csrfCookie)
+                        .header("X-XSRF-TOKEN", csrfCookie.getValue())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "expectedVersion":0,
+                                  "occurrences":[
+                                    {"occurrenceId":"%s","dueDate":"%s"}
+                                  ]
+                                }
+                                """.formatted(occurrenceId, dueDate)))
                 .andReturn()
                 .getResponse()
                 .getStatus();

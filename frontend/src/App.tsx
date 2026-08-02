@@ -50,7 +50,19 @@ import {
   ExerciseSummary,
   updateExerciseResult
 } from "./study-session-api";
-import { listReviews, ReviewOccurrence, ReviewTiming, startReview } from "./review-api";
+import {
+  cancelReviewPlan,
+  getReviewPlan,
+  listReviewPlans,
+  listReviews,
+  reactivateReviewPlan,
+  ReviewOccurrence,
+  ReviewPlan,
+  ReviewPlanSummary,
+  ReviewTiming,
+  startReview,
+  updateReviewSchedule
+} from "./review-api";
 import "./styles.css";
 
 function BrandMark() {
@@ -2526,6 +2538,14 @@ function ProtectedReviewsPage() {
           </div>
         </div>
 
+        <div className="reviews-plan-navigation">
+          <div>
+            <strong>Planos com vida própria</strong>
+            <span>Reagende datas, consulte o histórico ou interrompa uma sequência.</span>
+          </div>
+          <Link className="secondary-button" to="/revisoes/planos">Gerenciar planos</Link>
+        </div>
+
         {reviewQueue.isPending && <p className="review-queue-state">Organizando sua fila de revisões…</p>}
         {reviewQueue.isError && (
           <div className="review-queue-state is-error" role="alert">
@@ -2558,6 +2578,328 @@ function ProtectedReviewsPage() {
             <ReviewGroup title="Revisões atrasadas" description="Retome sem deslocar o plano" reviews={overdue} timing="OVERDUE" onStart={(review) => startReviewMutation.mutate(review)} pendingId={startReviewMutation.isPending ? startReviewMutation.variables?.occurrenceId : undefined} blocked={reviewActionsBlocked} />
             <ReviewGroup title="Próximas revisões" description="Seu horizonte" reviews={future} timing="FUTURE" onStart={(review) => startReviewMutation.mutate(review)} pendingId={startReviewMutation.isPending ? startReviewMutation.variables?.occurrenceId : undefined} blocked={reviewActionsBlocked} />
           </div>
+        )}
+      </main>
+    </AppShell>
+  );
+}
+
+function ReviewPlanSummaryCard({ plan }: { plan: ReviewPlanSummary }) {
+  const active = plan.status === "ACTIVE";
+  const counts = [
+    plan.scheduledCount > 0 ? `${plan.scheduledCount} ${plan.scheduledCount === 1 ? "futura" : "futuras"}` : null,
+    plan.completedCount > 0 ? `${plan.completedCount} ${plan.completedCount === 1 ? "concluída" : "concluídas"}` : null,
+    plan.skippedCount > 0 ? `${plan.skippedCount} ${plan.skippedCount === 1 ? "ignorada" : "ignoradas"}` : null,
+    plan.canceledCount > 0 ? `${plan.canceledCount} ${plan.canceledCount === 1 ? "cancelada" : "canceladas"}` : null
+  ].filter((count): count is string => Boolean(count));
+
+  return (
+    <article className={`review-plan-summary is-${plan.status.toLowerCase()}`} aria-label={`Plano de ${plan.contentName}`}>
+      <span className="review-plan-summary-bookmark" aria-hidden="true">{active ? "↗" : "—"}</span>
+      <div className="review-plan-summary-copy">
+        <span className="card-kicker">{plan.subjectName}</span>
+        <h2>{plan.contentName}</h2>
+        <span className={`review-plan-state is-${plan.status.toLowerCase()}`}>
+          {active ? "Plano ativo" : "Plano cancelado"}
+        </span>
+        <small>Estudo-base em {formatCivilDate(plan.initialStudyDate)}</small>
+      </div>
+      <div className="review-plan-summary-history" aria-label="Resumo do histórico">
+        {counts.map((count) => <span key={count}>{count}</span>)}
+      </div>
+      <Link className="secondary-button review-plan-manage" to={`/revisoes/planos/${plan.id}`}>
+        Gerenciar <span className="sr-only">{plan.contentName}</span>
+      </Link>
+    </article>
+  );
+}
+
+function ProtectedReviewPlansPage() {
+  const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
+  const plans = useQuery({
+    queryKey: ["review-plans"],
+    queryFn: listReviewPlans,
+    enabled: auth.data?.state === "authenticated"
+  });
+
+  if (auth.isPending) {
+    return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
+  }
+  if (auth.isError || auth.data?.state !== "authenticated") {
+    return <Navigate to="/" replace />;
+  }
+
+  return (
+    <AppShell authenticated activeSection="reviews" topbarMeta="Sequências de memória">
+      <main className="content review-plans-content">
+        <div className="page-heading review-plans-heading">
+          <div>
+            <span className="eyebrow">Arquivo de revisões</span>
+            <h1>Planos de revisão</h1>
+            <p>Cada sequência preserva o que já aconteceu e deixa o futuro sob seu controle.</p>
+          </div>
+          <Link className="secondary-button" to="/revisoes">Voltar à fila</Link>
+        </div>
+        {plans.isPending && <p className="review-queue-state">Abrindo seu arquivo de planos…</p>}
+        {plans.isError && (
+          <div className="review-queue-state is-error" role="alert">
+            <p>Não foi possível consultar seus planos de revisão.</p>
+            <button className="secondary-button" type="button" onClick={() => void plans.refetch()}>Tentar novamente</button>
+          </div>
+        )}
+        {!plans.isPending && !plans.isError && plans.data?.length === 0 && (
+          <section className="review-empty" aria-label="Nenhum plano de revisão">
+            <span className="review-empty-bookmark" aria-hidden="true">＋</span>
+            <div><h2>Nenhum plano criado</h2><p>Finalize uma sessão com conteúdo para iniciar sua primeira sequência.</p></div>
+          </section>
+        )}
+        {!plans.isPending && !plans.isError && Boolean(plans.data?.length) && (
+          <div className="review-plan-summary-list">{plans.data?.map((plan) => <ReviewPlanSummaryCard key={plan.id} plan={plan} />)}</div>
+        )}
+      </main>
+    </AppShell>
+  );
+}
+
+function dateInTimeZone(timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function nextCivilDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1));
+  return next.toISOString().slice(0, 10);
+}
+
+function reviewOccurrenceLabel(occurrence: ReviewPlan["occurrences"][number], today: string) {
+  if (occurrence.status === "COMPLETED") return "Concluída";
+  if (occurrence.status === "SKIPPED") return "Ignorada";
+  if (occurrence.status === "CANCELED") return "Cancelada";
+  if (occurrence.inProgress) return "Em andamento";
+  if (occurrence.dueDate < today) return "Atrasada";
+  if (occurrence.dueDate === today) return "Para hoje";
+  return "Agendada";
+}
+
+function CancelReviewPlanDialog({ pendingCount, pending, error, onKeep, onConfirm }: {
+  pendingCount: number;
+  pending: boolean;
+  error?: string;
+  onKeep: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog review-plan-cancel-dialog" ref={dialogRef} aria-labelledby="review-plan-cancel-title" onCancel={(event) => { event.preventDefault(); if (!pending) onKeep(); }}>
+      <div className="study-session-dialog-panel">
+        <header>
+          <span className="study-session-dialog-mark review-plan-cancel-mark" aria-hidden="true">—</span>
+          <div>
+            <span className="card-kicker">Interromper sequência</span>
+            <h2 id="review-plan-cancel-title">Cancelar plano de revisão?</h2>
+            <p>{pendingCount} {pendingCount === 1 ? "revisão pendente será cancelada" : "revisões pendentes serão canceladas"}.</p>
+          </div>
+        </header>
+        <p className="review-plan-cancel-impact">A revisão já concluída continuará no histórico. Você poderá reativar o plano depois, sem duplicar ocorrências.</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" autoFocus onClick={onKeep} disabled={pending}>Manter plano</button>
+          <button className="danger-button" type="button" onClick={onConfirm} disabled={pending}>{pending ? "Cancelando…" : "Confirmar cancelamento"}</button>
+        </footer>
+      </div>
+    </dialog>
+  );
+}
+
+function ProtectedReviewPlanPage() {
+  const { planId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [dates, setDates] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const auth = useQuery({ queryKey: ["auth-snapshot"], queryFn: loadAuthSnapshot });
+  const plan = useQuery({
+    queryKey: ["review-plan", planId],
+    queryFn: () => getReviewPlan(planId),
+    enabled: auth.data?.state === "authenticated" && Boolean(planId)
+  });
+  const timeZone = auth.data?.state === "authenticated" ? auth.data.identity.timeZone : "UTC";
+  const today = dateInTimeZone(timeZone);
+
+  useEffect(() => {
+    if (!plan.data) return;
+    setDates(Object.fromEntries(plan.data.occurrences.map((occurrence) => [occurrence.id, occurrence.dueDate])));
+  }, [plan.data]);
+
+  const scheduleMutation = useMutation({
+    mutationFn: (occurrences: Array<{ occurrenceId: string; dueDate: string }>) =>
+      updateReviewSchedule(planId, plan.data!.version, occurrences),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["review-plan", planId], updated);
+      void queryClient.invalidateQueries({ queryKey: ["review-plans"] });
+      setSaved(true);
+    }
+  });
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelReviewPlan(planId, plan.data!.version),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["review-plan", planId], updated);
+      void queryClient.invalidateQueries({ queryKey: ["review-plans"] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews"] });
+      setConfirmingCancel(false);
+    }
+  });
+  const reactivateMutation = useMutation({
+    mutationFn: () => reactivateReviewPlan(planId, plan.data!.version),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["review-plan", planId], updated);
+      void queryClient.invalidateQueries({ queryKey: ["review-plans"] });
+      void queryClient.invalidateQueries({ queryKey: ["reviews"] });
+    }
+  });
+
+  if (auth.isPending) {
+    return <AppShell authenticated={false}><main className="content"><p>Verificando acesso…</p></main></AppShell>;
+  }
+  if (auth.isError || auth.data?.state !== "authenticated") return <Navigate to="/" replace />;
+
+  if (plan.isPending) {
+    return <AppShell authenticated activeSection="reviews" topbarMeta="Plano de revisão"><main className="content review-plans-content"><p className="review-queue-state">Abrindo o plano…</p></main></AppShell>;
+  }
+  if (plan.isError || !plan.data) {
+    return (
+      <AppShell authenticated activeSection="reviews" topbarMeta="Plano de revisão">
+        <main className="content review-plans-content">
+          <section className="review-queue-state is-error" role="alert"><p>Este plano não foi encontrado.</p><Link className="secondary-button" to="/revisoes/planos">Voltar aos planos</Link></section>
+        </main>
+      </AppShell>
+    );
+  }
+
+  const currentPlan = plan.data;
+  const editable = (occurrence: ReviewPlan["occurrences"][number]) =>
+    currentPlan.status === "ACTIVE" && occurrence.status === "SCHEDULED" && !occurrence.inProgress && occurrence.dueDate > today;
+  const changes = currentPlan.occurrences
+    .filter((occurrence) => editable(occurrence) && dates[occurrence.id] && dates[occurrence.id] !== occurrence.dueDate)
+    .map((occurrence) => ({ occurrenceId: occurrence.id, dueDate: dates[occurrence.id] }));
+  const pendingCount = currentPlan.occurrences.filter((occurrence) => occurrence.status === "SCHEDULED").length;
+
+  function submitSchedule(event: FormEvent) {
+    event.preventDefault();
+    setSaved(false);
+    if (changes.length > 0) scheduleMutation.mutate(changes);
+  }
+
+  return (
+    <AppShell authenticated activeSection="reviews" topbarMeta="Plano de revisão">
+      <main className="content review-plan-detail-content">
+        <Link className="catalog-back-link" to="/revisoes/planos">← Voltar para planos</Link>
+        <header className="review-plan-detail-heading">
+          <div>
+            <span className="eyebrow">{currentPlan.subject.name}</span>
+            <h1>{currentPlan.content.name}</h1>
+            <p>Estudo-base em {formatCivilDate(currentPlan.initialStudyDate)} · versão {currentPlan.version}</p>
+          </div>
+          <span className={`review-plan-state is-${currentPlan.status.toLowerCase()}`}>
+            {currentPlan.status === "ACTIVE" ? "Plano ativo" : "Plano cancelado"}
+          </span>
+        </header>
+
+        <form className="review-plan-timeline-card" onSubmit={submitSchedule}>
+          <div className="review-plan-timeline-intro">
+            <div><span className="card-kicker">Linha do tempo</span><h2>Histórico e próximas datas</h2></div>
+            <p>O que já aconteceu fica preservado. Apenas revisões futuras podem mudar de data.</p>
+          </div>
+          <ol className="review-plan-timeline">
+            {currentPlan.occurrences.map((occurrence) => {
+              const statusLabel = reviewOccurrenceLabel(occurrence, today);
+              const canEdit = editable(occurrence);
+              return (
+                <li key={occurrence.id} className={`review-plan-occurrence is-${occurrence.status.toLowerCase()}${canEdit ? " is-editable" : ""}`}>
+                  <span className="review-plan-interval" aria-hidden="true">D+{occurrence.intervalDays}</span>
+                  <div className="review-plan-occurrence-copy">
+                    <strong>Revisão D+{occurrence.intervalDays}</strong>
+                    <span className={`review-plan-occurrence-state is-${occurrence.status.toLowerCase()}`}>{statusLabel}</span>
+                  </div>
+                  <label className="review-plan-date-field">
+                    <span>Data da revisão D+{occurrence.intervalDays}</span>
+                    <input
+                      type="date"
+                      value={dates[occurrence.id] ?? occurrence.dueDate}
+                      disabled={!canEdit || scheduleMutation.isPending}
+                      min={nextCivilDate(today)}
+                      onChange={(event) => {
+                        setSaved(false);
+                        setDates((current) => ({ ...current, [occurrence.id]: event.target.value }));
+                      }}
+                    />
+                  </label>
+                </li>
+              );
+            })}
+          </ol>
+          <div className="review-plan-editor-footer">
+            <div className="review-plan-editor-feedback" aria-live="polite">
+              {saved && <p className="form-success">Novas datas salvas.</p>}
+              {scheduleMutation.isError && <p className="form-error" role="alert">{scheduleMutation.error instanceof ApiError ? scheduleMutation.error.message : "Não foi possível salvar as novas datas."}</p>}
+              {scheduleMutation.error instanceof ApiError && scheduleMutation.error.status === 409 && (
+                <button className="text-button" type="button" onClick={() => {
+                  scheduleMutation.reset();
+                  setSaved(false);
+                  void plan.refetch();
+                }}>Carregar versão mais recente</button>
+              )}
+            </div>
+            {currentPlan.status === "ACTIVE" && (
+              <button className="primary-button compact-button" type="submit" disabled={changes.length === 0 || scheduleMutation.isPending}>
+                {scheduleMutation.isPending ? "Salvando…" : "Salvar novas datas"}
+              </button>
+            )}
+          </div>
+        </form>
+        <section className={`review-plan-maintenance is-${currentPlan.status.toLowerCase()}`}>
+          <div>
+            <span className="card-kicker">Controle da sequência</span>
+            <h2>{currentPlan.status === "ACTIVE" ? "Interromper este plano" : "Retomar este plano"}</h2>
+            <p>{currentPlan.status === "ACTIVE"
+              ? "Cancela apenas as revisões ainda pendentes e mantém o histórico intacto."
+              : "Restaura as ocorrências canceladas na mesma sequência, sem duplicar o histórico."}</p>
+            {reactivateMutation.isError && <p className="form-error" role="alert">{reactivateMutation.error instanceof ApiError ? reactivateMutation.error.message : "Não foi possível reativar este plano."}</p>}
+          </div>
+          {currentPlan.status === "ACTIVE" ? (
+            <button className="danger-button" type="button" onClick={() => setConfirmingCancel(true)}>Cancelar plano</button>
+          ) : (
+            <button className="primary-button" type="button" onClick={() => reactivateMutation.mutate()} disabled={reactivateMutation.isPending}>
+              {reactivateMutation.isPending ? "Reativando…" : "Reativar plano"}
+            </button>
+          )}
+        </section>
+        {confirmingCancel && (
+          <CancelReviewPlanDialog
+            pendingCount={pendingCount}
+            pending={cancelMutation.isPending}
+            error={cancelMutation.isError ? (cancelMutation.error instanceof ApiError ? cancelMutation.error.message : "Não foi possível cancelar este plano.") : undefined}
+            onKeep={() => setConfirmingCancel(false)}
+            onConfirm={() => cancelMutation.mutate()}
+          />
         )}
       </main>
     </AppShell>
@@ -2910,6 +3252,8 @@ export function App() {
         <Route path="/materias/:subjectId/conteudos" element={<ProtectedContentsPage />} />
         <Route path="/ciclos" element={<ProtectedStudyCyclesPage />} />
         <Route path="/revisoes" element={<ProtectedReviewsPage />} />
+        <Route path="/revisoes/planos" element={<ProtectedReviewPlansPage />} />
+        <Route path="/revisoes/planos/:planId" element={<ProtectedReviewPlanPage />} />
         <Route path="/conta" element={<ProtectedAccountPage />} />
         <Route path="/redefinir-senha" element={<PasswordResetPage />} />
       </Routes>
