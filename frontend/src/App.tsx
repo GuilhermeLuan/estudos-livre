@@ -37,9 +37,10 @@ import {
 } from "./study-cycle-api";
 import {
   createManualStudySession,
+  deleteStudySession,
   finishStudySession,
   listStudySessionHistory,
-  loadExerciseSummary,
+  loadStudySessionSummary,
   loadCurrentStudySession,
   pauseStudySession,
   resumeStudySession,
@@ -47,8 +48,9 @@ import {
   StudySession,
   StartStudySessionInput,
   ExerciseResultInput,
-  ExerciseSummary,
-  updateExerciseResult
+  StudySessionSummary,
+  UpdateStudySessionInput,
+  updateStudySession
 } from "./study-session-api";
 import {
   cancelReviewPlan,
@@ -430,6 +432,20 @@ function formatAccuracy(value: number) {
   return value.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
+function formatDateTimeLocal(value: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+}
+
 function useLiveSessionSeconds(session: StudySession | null | undefined) {
   const [seconds, setSeconds] = useState(session?.measuredSeconds ?? 0);
 
@@ -624,14 +640,24 @@ function FinishStudySessionDialog({ session, measuredSeconds, effectiveDuration,
   );
 }
 
-function ExerciseResultDialog({ session, pending, error, onCancel, onSubmit }: {
+function EditStudySessionDialog({ session, subjects, contents, selectedSubjectId, timeZone, pending, error, onSubjectChange, onCancel, onDelete, onSubmit }: {
   session: StudySession;
+  subjects: Subject[];
+  contents: StudyContent[];
+  selectedSubjectId: string;
+  timeZone: string;
   pending: boolean;
   error?: string;
+  onSubjectChange: (subjectId: string) => void;
   onCancel: () => void;
-  onSubmit: (exerciseResult: ExerciseResultInput) => void;
+  onDelete: () => void;
+  onSubmit: (input: UpdateStudySessionInput) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [selectedContentId, setSelectedContentId] = useState(session.content?.id ?? "");
+  const [startedAtLocal, setStartedAtLocal] = useState(() => formatDateTimeLocal(session.startedAt, timeZone));
+  const [effectiveDuration, setEffectiveDuration] = useState(() => formatTimer(session.effectiveSeconds ?? 0));
+  const [notes, setNotes] = useState(session.notes ?? "");
   const [questionsAttemptedInput, setQuestionsAttemptedInput] = useState(
     String(session.exerciseResult?.questionsAttempted ?? "")
   );
@@ -640,15 +666,18 @@ function ExerciseResultDialog({ session, pending, error, onCancel, onSubmit }: {
   );
   const questionsAttempted = questionsAttemptedInput === "" ? null : Number(questionsAttemptedInput);
   const questionsCorrect = questionsCorrectInput === "" ? null : Number(questionsCorrectInput);
-  const valid = Number.isInteger(questionsAttempted)
+  const noExerciseResult = questionsAttemptedInput === "" && questionsCorrectInput === "";
+  const validExerciseResult = noExerciseResult || (Number.isInteger(questionsAttempted)
     && Number.isInteger(questionsCorrect)
     && questionsAttempted !== null
     && questionsCorrect !== null
     && questionsAttempted >= 0
     && questionsCorrect >= 0
     && questionsCorrect <= questionsAttempted
-    && (questionsAttempted > 0 || questionsCorrect === 0);
-  const accuracy = valid && questionsAttempted! > 0
+    && (questionsAttempted! > 0 || questionsCorrect === 0));
+  const effectiveSeconds = parseTimer(effectiveDuration);
+  const valid = Boolean(startedAtLocal && effectiveSeconds && selectedSubjectId && validExerciseResult);
+  const accuracy = validExerciseResult && questionsAttempted !== null && questionsAttempted > 0
     ? questionsCorrect! / questionsAttempted! * 100
     : null;
 
@@ -663,36 +692,119 @@ function ExerciseResultDialog({ session, pending, error, onCancel, onSubmit }: {
   }, []);
 
   return (
-    <dialog className="study-session-dialog exercise-result-dialog" ref={dialogRef} aria-labelledby="exercise-result-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+    <dialog className="study-session-dialog manual-session-dialog" ref={dialogRef} aria-labelledby="edit-study-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
       <form className="study-session-dialog-panel" onSubmit={(event) => {
         event.preventDefault();
-        if (valid) onSubmit({ questionsAttempted: questionsAttempted!, questionsCorrect: questionsCorrect! });
+        if (!valid || !effectiveSeconds) return;
+        onSubmit({
+          expectedVersion: session.version,
+          startedAtLocal: startedAtLocal.length === 16 ? `${startedAtLocal}:00` : startedAtLocal,
+          effectiveSeconds,
+          subjectId: selectedSubjectId,
+          ...(selectedContentId ? { contentId: selectedContentId } : {}),
+          notes: notes.trim() || null,
+          ...(!noExerciseResult ? { questionsAttempted: questionsAttempted!, questionsCorrect: questionsCorrect! } : {})
+        });
       }}>
         <header>
-          <span className="study-session-dialog-mark" aria-hidden="true">%</span>
+          <span className="study-session-dialog-mark" aria-hidden="true">✎</span>
           <div>
             <span className="card-kicker">Correção da ficha</span>
-            <h2 id="exercise-result-title">Editar exercícios</h2>
-            <p>{session.subject.name} · {session.content?.name ?? "Sem conteúdo específico"}</p>
+            <h2 id="edit-study-session-title">Editar sessão concluída</h2>
+            <p>Corrija o registro completo; os totais e o progresso serão recalculados.</p>
           </div>
         </header>
-        <div className="exercise-result-fields">
-          <label htmlFor="edit-questions-attempted">Questões realizadas
-            <input id="edit-questions-attempted" type="number" min="0" step="1" inputMode="numeric" autoFocus value={questionsAttemptedInput} onChange={(event) => setQuestionsAttemptedInput(event.target.value)} disabled={pending} />
+        <div className="manual-session-fields">
+          <div className="manual-session-timing">
+            <label htmlFor="edit-started-at">Data e hora
+              <input id="edit-started-at" type="datetime-local" autoFocus value={startedAtLocal} onChange={(event) => setStartedAtLocal(event.target.value)} disabled={pending} required />
+            </label>
+            <label htmlFor="edit-duration">Duração efetiva
+              <input id="edit-duration" aria-label="Duração efetiva" inputMode="numeric" pattern="[0-9]+:[0-5][0-9]:[0-5][0-9]" value={effectiveDuration} onChange={(event) => setEffectiveDuration(event.target.value)} disabled={pending} required />
+            </label>
+          </div>
+          <div className="manual-session-context">
+            <label htmlFor="edit-subject">Matéria
+              <select id="edit-subject" value={selectedSubjectId} onChange={(event) => { setSelectedContentId(""); onSubjectChange(event.target.value); }} disabled={pending} required>
+                {subjects.map((subject) => <option value={subject.id} key={subject.id}>{subject.name}</option>)}
+              </select>
+            </label>
+            <label htmlFor="edit-content">Conteúdo (opcional)
+              <select id="edit-content" value={selectedContentId} onChange={(event) => setSelectedContentId(event.target.value)} disabled={pending}>
+                <option value="">Sem conteúdo específico</option>
+                {contents.map((content) => <option value={content.id} key={content.id}>{content.name}</option>)}
+              </select>
+            </label>
+          </div>
+          <label htmlFor="edit-notes">Anotações (opcional)
+            <textarea id="edit-notes" maxLength={4000} rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} disabled={pending} />
           </label>
-          <label htmlFor="edit-questions-correct">Questões corretas
-            <input id="edit-questions-correct" type="number" min="0" step="1" inputMode="numeric" value={questionsCorrectInput} onChange={(event) => setQuestionsCorrectInput(event.target.value)} disabled={pending} />
-          </label>
-          {accuracy !== null && <output>{questionsCorrect} de {questionsAttempted} · {formatAccuracy(accuracy)}% de acerto</output>}
-          {questionsAttempted === 0 && questionsCorrect === 0 && <p>Salvar com zero remove o resultado desta sessão.</p>}
+          <fieldset className="finish-session-exercises">
+            <legend>Exercícios <span>(opcional)</span></legend>
+            <div>
+              <label htmlFor="edit-questions-attempted">Questões realizadas
+                <input id="edit-questions-attempted" type="number" min="0" step="1" inputMode="numeric" value={questionsAttemptedInput} onChange={(event) => setQuestionsAttemptedInput(event.target.value)} disabled={pending} />
+              </label>
+              <label htmlFor="edit-questions-correct">Questões corretas
+                <input id="edit-questions-correct" type="number" min="0" step="1" inputMode="numeric" value={questionsCorrectInput} onChange={(event) => setQuestionsCorrectInput(event.target.value)} disabled={pending} />
+              </label>
+            </div>
+            {accuracy !== null && <output>{questionsCorrect} de {questionsAttempted} · {formatAccuracy(accuracy)}% de acerto</output>}
+          </fieldset>
         </div>
-        {!valid && <p className="form-error" role="alert">Informe números inteiros e não deixe os acertos superarem as questões realizadas.</p>}
+        {effectiveDuration && !effectiveSeconds && <p className="form-error" role="alert">Informe uma duração maior que zero no formato horas:minutos:segundos.</p>}
+        {!validExerciseResult && <p className="form-error" role="alert">Informe as duas quantidades e não deixe os acertos superarem as questões realizadas.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <footer>
+          <button className="danger-button edit-session-delete" type="button" onClick={onDelete} disabled={pending}>Excluir sessão</button>
           <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Cancelar</button>
-          <button className="primary-button" type="submit" disabled={pending || !valid}>{pending ? "Salvando…" : "Salvar exercícios"}</button>
+          <button className="primary-button" type="submit" disabled={pending || !valid}>{pending ? "Salvando…" : "Salvar alterações"}</button>
         </footer>
       </form>
+    </dialog>
+  );
+}
+
+function DeleteStudySessionDialog({ session, pending, error, onCancel, onConfirm }: {
+  session: StudySession;
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") dialog.showModal();
+    else dialog.setAttribute("open", "");
+    return () => {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+    };
+  }, []);
+
+  return (
+    <dialog className="study-session-dialog delete-study-session-dialog" ref={dialogRef} aria-labelledby="delete-study-session-title" onCancel={(event) => { event.preventDefault(); if (!pending) onCancel(); }}>
+      <div className="study-session-dialog-panel">
+        <header>
+          <span className="study-session-dialog-mark delete-study-session-mark" aria-hidden="true">×</span>
+          <div>
+            <span className="card-kicker">Remover registro</span>
+            <h2 id="delete-study-session-title">Excluir sessão concluída?</h2>
+            <p><strong>{session.subject.name}</strong> · {formatCycleMinutes(Math.round((session.effectiveSeconds ?? 0) / 60))}</p>
+          </div>
+        </header>
+        <div className="delete-study-session-copy">
+          <p>Esta ação não pode ser desfeita.</p>
+          <small>Os totais de estudo e o progresso compatível serão recalculados.</small>
+        </div>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onCancel} disabled={pending}>Manter sessão</button>
+          <button className="danger-button" type="button" autoFocus onClick={onConfirm} disabled={pending}>{pending ? "Excluindo…" : "Excluir definitivamente"}</button>
+        </footer>
+      </div>
     </dialog>
   );
 }
@@ -804,11 +916,11 @@ function ManualStudySessionDialog({
   );
 }
 
-function StudySessionHistory({ sessions, pending, error, onEditExercises }: {
+function StudySessionHistory({ sessions, pending, error, onEdit }: {
   sessions: StudySession[];
   pending: boolean;
   error: boolean;
-  onEditExercises: (session: StudySession) => void;
+  onEdit: (session: StudySession) => void;
 }) {
   return (
     <section className="study-history" aria-label="Histórico recente">
@@ -831,7 +943,7 @@ function StudySessionHistory({ sessions, pending, error, onEditExercises }: {
               </div>
               <div className="study-history-meta">
                 <time dateTime={session.startedAt}>{new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(session.startedAt))}</time>
-                <button className="text-button" type="button" aria-label={`Editar exercícios de ${session.subject.name}`} onClick={() => onEditExercises(session)}>Editar exercícios</button>
+                <button className="text-button" type="button" aria-label={`Editar ficha de ${session.subject.name}`} onClick={() => onEdit(session)}>Editar ficha</button>
               </div>
             </li>
           ))}
@@ -841,37 +953,37 @@ function StudySessionHistory({ sessions, pending, error, onEditExercises }: {
   );
 }
 
-function ExerciseSummaryPanel({ summary, pending, error }: {
-  summary?: ExerciseSummary;
+function StudySessionSummaryPanel({ summary, pending, error }: {
+  summary?: StudySessionSummary;
   pending: boolean;
   error: boolean;
 }) {
   const empty = !summary || (summary.subjects.length === 0 && summary.contents.length === 0);
   return (
-    <section className="exercise-summary" aria-label="Resumo de exercícios">
+    <section className="exercise-summary" aria-label="Resumo de estudos">
       <header>
-        <div><span className="card-kicker">Desempenho acumulado</span><h2>Resumo de exercícios</h2></div>
-        <span>acertos sobre realizadas</span>
+        <div><span className="card-kicker">Tempo e desempenho</span><h2>Resumo de estudos</h2></div>
+        <span>tempo · acertos sobre realizadas</span>
       </header>
       {pending && <p className="study-history-state">Somando seus resultados…</p>}
-      {error && <p className="form-error" role="alert">Não foi possível carregar o resumo de exercícios.</p>}
-      {!pending && !error && empty && <p className="study-history-state">Finalize uma sessão com questões para começar o resumo.</p>}
+      {error && <p className="form-error" role="alert">Não foi possível carregar o resumo de estudos.</p>}
+      {!pending && !error && empty && <p className="study-history-state">Conclua uma sessão para começar o resumo.</p>}
       {!pending && !error && summary && !empty && (
         <div className="exercise-summary-grid">
           {summary.subjects.map((subject) => (
-            <article key={subject.subjectId}>
+            <article key={subject.subject.id}>
               <span>Matéria</span>
-              <strong>{subject.subjectName}</strong>
+              <strong>{subject.subject.name}</strong>
               <b>{subject.questionsCorrect} / {subject.questionsAttempted}</b>
-              <small>{formatAccuracy(subject.accuracyPercentage)}% de acerto</small>
+              <small>{formatCycleMinutes(Math.round(subject.effectiveSeconds / 60))} · <span>{subject.accuracyPercentage === null ? "sem questões" : `${formatAccuracy(subject.accuracyPercentage)}% de acerto`}</span></small>
             </article>
           ))}
           {summary.contents.map((content) => (
-            <article className="is-content" key={content.contentId}>
-              <span>Conteúdo · {content.subjectName}</span>
-              <strong>{content.contentName}</strong>
+            <article className="is-content" key={content.content.id}>
+              <span>Conteúdo · {content.subject.name}</span>
+              <strong>{content.content.name}</strong>
               <b>{content.questionsCorrect} / {content.questionsAttempted}</b>
-              <small>{formatAccuracy(content.accuracyPercentage)}% de acerto</small>
+              <small>{formatCycleMinutes(Math.round(content.effectiveSeconds / 60))} · <span>{content.accuracyPercentage === null ? "sem questões" : `${formatAccuracy(content.accuracyPercentage)}% de acerto`}</span></small>
             </article>
           ))}
         </div>
@@ -990,7 +1102,9 @@ function ProtectedStudyCyclesPage() {
   const [showRunLedger, setShowRunLedger] = useState(false);
   const [showManualSession, setShowManualSession] = useState(false);
   const [showStudyHistory, setShowStudyHistory] = useState(false);
-  const [editingExerciseSession, setEditingExerciseSession] = useState<StudySession>();
+  const [editingStudySession, setEditingStudySession] = useState<StudySession>();
+  const [deletingStudySession, setDeletingStudySession] = useState<StudySession>();
+  const [editSubjectId, setEditSubjectId] = useState("");
   const [manualSubjectId, setManualSubjectId] = useState("");
   const [manualContentId, setManualContentId] = useState("");
   const [manualStartedAt, setManualStartedAt] = useState("");
@@ -1017,15 +1131,15 @@ function ProtectedStudyCyclesPage() {
     staleTime: 30_000
   });
   const exerciseSummary = useQuery({
-    queryKey: ["study-session", "exercise-summary"],
-    queryFn: loadExerciseSummary,
+    queryKey: ["study-session", "summary"],
+    queryFn: loadStudySessionSummary,
     enabled: showStudyHistory,
     staleTime: 30_000
   });
   const subjects = useQuery({
     queryKey: ["subjects", "active"],
     queryFn: () => listSubjects("active"),
-    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion || sessionComposer === "FREE" || showManualSession),
+    enabled: auth.data?.state === "authenticated" && (Boolean(selectedCycleId) || showSuggestion || sessionComposer === "FREE" || showManualSession || Boolean(editingStudySession)),
     staleTime: 30_000
   });
   const currentSession = useQuery({
@@ -1046,7 +1160,21 @@ function ProtectedStudyCyclesPage() {
     enabled: showManualSession && Boolean(manualSubjectId),
     staleTime: 30_000
   });
+  const editContents = useQuery({
+    queryKey: ["contents", editSubjectId, "active"],
+    queryFn: () => listContents(editSubjectId, "active"),
+    enabled: Boolean(editingStudySession && editSubjectId),
+    staleTime: 30_000
+  });
   const liveSessionSeconds = useLiveSessionSeconds(currentSession.data);
+
+  function invalidateStudySessionMaintenanceQueries() {
+    void queryClient.invalidateQueries({ queryKey: ["study-session", "history"] });
+    void queryClient.invalidateQueries({ queryKey: ["study-session", "summary"] });
+    void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
+    void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
+    void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
+  }
 
   useEffect(() => {
     if (!showSuggestion || suggestionInitialized || !subjects.data) return;
@@ -1187,24 +1315,33 @@ function ProtectedStudyCyclesPage() {
         finished,
         ...current.filter((session) => session.id !== finished.id)
       ]);
-      void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
-      void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
-      void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
+      invalidateStudySessionMaintenanceQueries();
       void queryClient.invalidateQueries({ queryKey: ["reviews"] });
       setFinishingSession(undefined);
       setEffectiveDuration("");
       setFinishMeasuredSeconds(0);
     }
   });
-  const exerciseResultMutation = useMutation({
-    mutationFn: ({ session, input }: { session: StudySession; input: ExerciseResultInput }) =>
-      updateExerciseResult(session.id, input),
+  const editStudySessionMutation = useMutation({
+    mutationFn: ({ session, input }: { session: StudySession; input: UpdateStudySessionInput }) =>
+      updateStudySession(session.id, input),
     onSuccess: (updated) => {
       queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) =>
         current.map((session) => session.id === updated.id ? updated : session)
       );
-      void queryClient.invalidateQueries({ queryKey: ["study-session", "exercise-summary"] });
-      setEditingExerciseSession(undefined);
+      invalidateStudySessionMaintenanceQueries();
+      setEditingStudySession(undefined);
+      setEditSubjectId("");
+    }
+  });
+  const deleteStudySessionMutation = useMutation({
+    mutationFn: (session: StudySession) => deleteStudySession(session.id, session.version),
+    onSuccess: (_, deleted) => {
+      queryClient.setQueryData<StudySession[]>(["study-session", "history"], (current = []) =>
+        current.filter((session) => session.id !== deleted.id)
+      );
+      invalidateStudySessionMaintenanceQueries();
+      setDeletingStudySession(undefined);
     }
   });
   const manualSessionMutation = useMutation({
@@ -1220,8 +1357,7 @@ function ProtectedStudyCyclesPage() {
         created,
         ...current.filter((session) => session.id !== created.id)
       ]);
-      void queryClient.invalidateQueries({ queryKey: ["study-cycles"] });
-      void queryClient.invalidateQueries({ queryKey: ["study-cycle-runs"] });
+      invalidateStudySessionMaintenanceQueries();
       setShowStudyHistory(true);
       setShowManualSession(false);
       setManualSubjectId("");
@@ -1492,7 +1628,7 @@ function ProtectedStudyCyclesPage() {
         )}
         {showStudyHistory && (
           <>
-            <ExerciseSummaryPanel
+            <StudySessionSummaryPanel
               summary={exerciseSummary.data}
               pending={exerciseSummary.isPending}
               error={exerciseSummary.isError}
@@ -1501,7 +1637,11 @@ function ProtectedStudyCyclesPage() {
               sessions={studyHistory.data ?? []}
               pending={studyHistory.isPending}
               error={studyHistory.isError}
-              onEditExercises={(session) => { exerciseResultMutation.reset(); setEditingExerciseSession(session); }}
+              onEdit={(session) => {
+                editStudySessionMutation.reset();
+                setEditSubjectId(session.subject.id);
+                setEditingStudySession(session);
+              }}
             />
           </>
         )}
@@ -1924,15 +2064,42 @@ function ProtectedStudyCyclesPage() {
             onSubmit={(effectiveSeconds, exerciseResult, scheduleReviews) => finishSessionMutation.mutate({ session: finishingSession, effectiveSeconds, exerciseResult, scheduleReviews })}
           />
         )}
-        {editingExerciseSession && (
-          <ExerciseResultDialog
-            session={editingExerciseSession}
-            pending={exerciseResultMutation.isPending}
-            error={exerciseResultMutation.isError
-              ? exerciseResultMutation.error instanceof ApiError ? exerciseResultMutation.error.message : "Não foi possível atualizar os exercícios."
+        {editingStudySession && auth.data.state === "authenticated" && (
+          <EditStudySessionDialog
+            session={editingStudySession}
+            subjects={subjects.data ?? []}
+            contents={editContents.data ?? []}
+            selectedSubjectId={editSubjectId}
+            timeZone={auth.data.identity.timeZone}
+            pending={editStudySessionMutation.isPending}
+            error={editStudySessionMutation.isError
+              ? editStudySessionMutation.error instanceof ApiError ? editStudySessionMutation.error.message : "Não foi possível atualizar a sessão."
               : undefined}
-            onCancel={() => { if (!exerciseResultMutation.isPending) setEditingExerciseSession(undefined); }}
-            onSubmit={(input) => exerciseResultMutation.mutate({ session: editingExerciseSession, input })}
+            onSubjectChange={setEditSubjectId}
+            onCancel={() => {
+              if (!editStudySessionMutation.isPending) {
+                setEditingStudySession(undefined);
+                setEditSubjectId("");
+              }
+            }}
+            onDelete={() => {
+              deleteStudySessionMutation.reset();
+              setDeletingStudySession(editingStudySession);
+              setEditingStudySession(undefined);
+              setEditSubjectId("");
+            }}
+            onSubmit={(input) => editStudySessionMutation.mutate({ session: editingStudySession, input })}
+          />
+        )}
+        {deletingStudySession && (
+          <DeleteStudySessionDialog
+            session={deletingStudySession}
+            pending={deleteStudySessionMutation.isPending}
+            error={deleteStudySessionMutation.isError
+              ? deleteStudySessionMutation.error instanceof ApiError ? deleteStudySessionMutation.error.message : "Não foi possível excluir a sessão."
+              : undefined}
+            onCancel={() => { if (!deleteStudySessionMutation.isPending) setDeletingStudySession(undefined); }}
+            onConfirm={() => deleteStudySessionMutation.mutate(deletingStudySession)}
           />
         )}
         {showManualSession && (

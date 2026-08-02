@@ -295,13 +295,13 @@ class StudySessionTimerIntegrationTest {
                         .with(user(principal))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"questionsAttempted":20,"questionsCorrect":15}
+                                {"expectedVersion":1,"questionsAttempted":20,"questionsCorrect":15}
                                 """)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.startedAt").value(JsonPath.read(finished, "$.startedAt").toString()))
                 .andExpect(jsonPath("$.finishedAt").value(JsonPath.read(finished, "$.finishedAt").toString()))
                 .andExpect(jsonPath("$.effectiveSeconds").value(1200))
-                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.version").value(2))
                 .andExpect(jsonPath("$.exerciseResult.questionsAttempted").value(20))
                 .andExpect(jsonPath("$.exerciseResult.questionsCorrect").value(15))
                 .andExpect(jsonPath("$.exerciseResult.accuracyPercentage").value(75.0));
@@ -331,7 +331,7 @@ class StudySessionTimerIntegrationTest {
                         .with(user(otherUser))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"questionsAttempted":20,"questionsCorrect":15}
+                                {"expectedVersion":1,"questionsAttempted":20,"questionsCorrect":15}
                                 """)))
                 .andExpect(status().isNotFound());
 
@@ -339,7 +339,7 @@ class StudySessionTimerIntegrationTest {
                         .with(user(owner))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"questionsAttempted":0,"questionsCorrect":0}
+                                {"expectedVersion":1,"questionsAttempted":0,"questionsCorrect":0}
                                 """)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.exerciseResult").isEmpty());
@@ -487,6 +487,31 @@ class StudySessionTimerIntegrationTest {
         mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(principal)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.stages[0].creditedSeconds").value(0));
+    }
+
+    @Test
+    void creditsAFreeSessionToTheActiveCycleWhenItsSubjectIsEligible() throws Exception {
+        IdentityPrincipal principal = createUser("livre-no-ciclo@example.com");
+        UUID subjectId = createSubject(principal, "Direito Previdenciário");
+        UUID cycleId = createConfiguredAndActiveCycle(principal, subjectId, "Ciclo previdenciário");
+        String created = startFreeSession(principal, subjectId);
+        UUID sessionId = UUID.fromString(JsonPath.read(created, "$.id"));
+
+        mockMvc.perform(withSpaCsrf(post("/api/study-sessions/{id}/finish", sessionId)
+                        .with(user(principal)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"effectiveSeconds\":600,\"expectedVersion\":0}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.credits.length()").value(1))
+                .andExpect(jsonPath("$.credits[0].cycleId").value(cycleId.toString()))
+                .andExpect(jsonPath("$.credits[0].creditedSeconds").value(600));
+
+        mockMvc.perform(get("/api/study-cycles/{id}", cycleId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stages[0].creditedSeconds").value(600));
+        mockMvc.perform(get("/api/study-sessions/history").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(sessionId.toString()))
+                .andExpect(jsonPath("$[0].credits[0].creditedSeconds").value(600));
     }
 
     @Test

@@ -79,10 +79,11 @@ public class StudySessionRepository {
         jdbcClient.sql("""
                         INSERT INTO study_session (
                             id, owner_id, origin, subject_id, content_id,
-                            cycle_id, cycle_run_id, cycle_stage_id
+                            cycle_id, cycle_run_id, cycle_stage_id,
+                            progress_cycle_id, progress_cycle_run_id
                         ) VALUES (
                             :id, :ownerId, :origin, :subjectId, :contentId,
-                            :cycleId, :cycleRunId, :cycleStageId
+                            :cycleId, :cycleRunId, :cycleStageId, :cycleId, :cycleRunId
                         )
                         """)
                 .param("id", id)
@@ -133,6 +134,49 @@ public class StudySessionRepository {
                 .param("effectiveSeconds", effectiveSeconds)
                 .param("notes", notes)
                 .update();
+    }
+
+    public void assignProgressCycle(UUID sessionId, UUID cycleId, UUID runId) {
+        jdbcClient.sql("""
+                        UPDATE study_session
+                        SET progress_cycle_id = :cycleId, progress_cycle_run_id = :runId
+                        WHERE id = :sessionId
+                        """)
+                .param("sessionId", sessionId).param("cycleId", cycleId).param("runId", runId).update();
+    }
+
+    public Optional<UUID> findProgressCycleId(UUID sessionId, UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT progress_cycle_id FROM study_session
+                        WHERE id = :sessionId AND owner_id = :ownerId
+                        """)
+                .param("sessionId", sessionId).param("ownerId", ownerId)
+                .query(UUID.class).optional();
+    }
+
+    public Optional<ProjectionContext> findProjectionContext(UUID sessionId, UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT progress_cycle_id, progress_cycle_run_id
+                        FROM study_session
+                        WHERE id = :sessionId AND owner_id = :ownerId
+                          AND progress_cycle_id IS NOT NULL AND progress_cycle_run_id IS NOT NULL
+                        """)
+                .param("sessionId", sessionId).param("ownerId", ownerId)
+                .query((rs, row) -> new ProjectionContext(
+                        rs.getObject("progress_cycle_id", UUID.class),
+                        rs.getObject("progress_cycle_run_id", UUID.class)))
+                .optional();
+    }
+
+    public boolean hasOpenCycleSession(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM study_session
+                            WHERE cycle_id = :cycleId AND origin = 'CYCLE'
+                              AND status IN ('ACTIVE', 'PAUSED')
+                        )
+                        """)
+                .param("cycleId", cycleId).query(Boolean.class).single();
     }
 
     public void createReview(
@@ -274,6 +318,55 @@ public class StudySessionRepository {
                 .update();
     }
 
+    public int updateFinished(
+            UUID id,
+            UUID ownerId,
+            int expectedVersion,
+            OffsetDateTime startedAt,
+            long effectiveSeconds,
+            UUID subjectId,
+            UUID contentId,
+            String notes) {
+        return jdbcClient.sql("""
+                        UPDATE study_session
+                        SET started_at = :startedAt,
+                            finished_at = :startedAt + (:effectiveSeconds * INTERVAL '1 second'),
+                            effective_seconds = :effectiveSeconds,
+                            subject_id = :subjectId,
+                            content_id = :contentId,
+                            notes = :notes,
+                            version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND owner_id = :ownerId
+                          AND status = 'FINISHED' AND version = :expectedVersion
+                        """)
+                .param("id", id).param("ownerId", ownerId).param("expectedVersion", expectedVersion)
+                .param("startedAt", startedAt).param("effectiveSeconds", effectiveSeconds)
+                .param("subjectId", subjectId).param("contentId", contentId).param("notes", notes)
+                .update();
+    }
+
+    public int advanceFinishedVersion(UUID id, UUID ownerId, int expectedVersion) {
+        return jdbcClient.sql("""
+                        UPDATE study_session
+                        SET version = version + 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id AND owner_id = :ownerId
+                          AND status = 'FINISHED' AND version = :expectedVersion
+                        """)
+                .param("id", id).param("ownerId", ownerId)
+                .param("expectedVersion", expectedVersion).update();
+    }
+
+    public int deleteFinished(UUID id, UUID ownerId, int expectedVersion) {
+        return jdbcClient.sql("""
+                        DELETE FROM study_session
+                        WHERE id = :id AND owner_id = :ownerId
+                          AND status = 'FINISHED' AND version = :expectedVersion
+                        """)
+                .param("id", id).param("ownerId", ownerId).param("expectedVersion", expectedVersion)
+                .update();
+    }
+
     public void saveExerciseResult(UUID sessionId, ExerciseResult result) {
         jdbcClient.sql("""
                         INSERT INTO study_session_exercise_result (
@@ -310,6 +403,39 @@ public class StudySessionRepository {
                 .param("runStageId", runStageId)
                 .param("creditedSeconds", creditedSeconds)
                 .update();
+    }
+
+    public void deleteCreditsForRun(UUID runId) {
+        jdbcClient.sql("""
+                        DELETE FROM study_session_credit credit
+                        USING study_cycle_run_stage stage
+                        WHERE credit.run_stage_id = stage.id AND stage.run_id = :runId
+                        """)
+                .param("runId", runId).update();
+    }
+
+    public java.util.List<ProjectionSession> findProjectionSessions(java.util.List<UUID> runIds) {
+        return jdbcClient.sql("""
+                        SELECT id, subject_id, effective_seconds
+                        FROM study_session
+                        WHERE progress_cycle_run_id IN (:runIds) AND status = 'FINISHED'
+                        ORDER BY started_at, id
+                        """)
+                .param("runIds", runIds)
+                .query((rs, row) -> new ProjectionSession(
+                        rs.getObject("id", UUID.class), rs.getObject("subject_id", UUID.class),
+                        rs.getLong("effective_seconds")))
+                .list();
+    }
+
+    public void moveProjectionSession(UUID sessionId, UUID cycleId, UUID runId) {
+        jdbcClient.sql("""
+                        UPDATE study_session
+                        SET progress_cycle_id = :cycleId, progress_cycle_run_id = :runId,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :sessionId
+                        """)
+                .param("sessionId", sessionId).param("cycleId", cycleId).param("runId", runId).update();
     }
 
     public java.util.List<StudySessionCredit> findCredits(UUID sessionId) {
@@ -379,6 +505,51 @@ public class StudySessionRepository {
                 .list();
     }
 
+    public java.util.List<SubjectSessionAggregate> findSubjectSessionSummary(UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT session.subject_id, subject.name AS subject_name,
+                               SUM(session.effective_seconds) AS effective_seconds,
+                               COALESCE(SUM(result.questions_attempted), 0) AS questions_attempted,
+                               COALESCE(SUM(result.questions_correct), 0) AS questions_correct
+                        FROM study_session session
+                        JOIN subject ON subject.id = session.subject_id
+                        LEFT JOIN study_session_exercise_result result ON result.session_id = session.id
+                        WHERE session.owner_id = :ownerId AND session.status = 'FINISHED'
+                        GROUP BY session.subject_id, subject.name
+                        ORDER BY subject.name, session.subject_id
+                        """)
+                .param("ownerId", ownerId)
+                .query((rs, row) -> new SubjectSessionAggregate(
+                        rs.getObject("subject_id", UUID.class), rs.getString("subject_name"),
+                        rs.getLong("effective_seconds"), rs.getLong("questions_attempted"),
+                        rs.getLong("questions_correct")))
+                .list();
+    }
+
+    public java.util.List<ContentSessionAggregate> findContentSessionSummary(UUID ownerId) {
+        return jdbcClient.sql("""
+                        SELECT session.content_id, content.name AS content_name,
+                               session.subject_id, subject.name AS subject_name,
+                               SUM(session.effective_seconds) AS effective_seconds,
+                               COALESCE(SUM(result.questions_attempted), 0) AS questions_attempted,
+                               COALESCE(SUM(result.questions_correct), 0) AS questions_correct
+                        FROM study_session session
+                        JOIN content ON content.id = session.content_id
+                        JOIN subject ON subject.id = session.subject_id
+                        LEFT JOIN study_session_exercise_result result ON result.session_id = session.id
+                        WHERE session.owner_id = :ownerId AND session.status = 'FINISHED'
+                        GROUP BY session.content_id, content.name, session.subject_id, subject.name
+                        ORDER BY subject.name, content.name, session.content_id
+                        """)
+                .param("ownerId", ownerId)
+                .query((rs, row) -> new ContentSessionAggregate(
+                        rs.getObject("content_id", UUID.class), rs.getString("content_name"),
+                        rs.getObject("subject_id", UUID.class), rs.getString("subject_name"),
+                        rs.getLong("effective_seconds"), rs.getLong("questions_attempted"),
+                        rs.getLong("questions_correct")))
+                .list();
+    }
+
     private static StudySession mapSession(ResultSet resultSet, int rowNumber) throws SQLException {
         return new StudySession(
                 resultSet.getObject("id", UUID.class),
@@ -436,5 +607,21 @@ public class StudySessionRepository {
             String subjectName,
             long questionsAttempted,
             long questionsCorrect) {
+    }
+
+    public record SubjectSessionAggregate(
+            UUID subjectId, String subjectName, long effectiveSeconds,
+            long questionsAttempted, long questionsCorrect) {
+    }
+
+    public record ContentSessionAggregate(
+            UUID contentId, String contentName, UUID subjectId, String subjectName,
+            long effectiveSeconds, long questionsAttempted, long questionsCorrect) {
+    }
+
+    public record ProjectionSession(UUID sessionId, UUID subjectId, long effectiveSeconds) {
+    }
+
+    public record ProjectionContext(UUID cycleId, UUID runId) {
     }
 }

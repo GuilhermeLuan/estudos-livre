@@ -747,25 +747,37 @@ describe("authentication journey", () => {
       credits: [],
       serverNow: "2026-07-17T12:20:00Z"
     };
+    let summaryRequests = 0;
+    let historySessions: typeof manualSession[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
       if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
       if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
-      if (url === "/api/study-sessions/history") return jsonResponse([]);
+      if (url === "/api/study-sessions/history") return jsonResponse(historySessions);
+      if (url === "/api/study-sessions/summary") {
+        summaryRequests += 1;
+        return jsonResponse({ subjects: [], contents: [] });
+      }
       if (url === "/api/subjects?status=active") return jsonResponse([
         { id: "subject-law", name: "Direito Constitucional", archived: false }
       ]);
       if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([
         { id: "content-rights", subjectId: "subject-law", name: "Direitos fundamentais", archived: false }
       ]);
-      if (url === "/api/study-sessions/manual" && init?.method === "POST") return jsonResponse(manualSession, 201);
+      if (url === "/api/study-sessions/manual" && init?.method === "POST") {
+        historySessions = [manualSession];
+        return jsonResponse(manualSession, 201);
+      }
       if (url === "/api/study-cycles") return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Histórico" }));
+    await screen.findByRole("region", { name: "Resumo de estudos" });
+    await waitFor(() => expect(summaryRequests).toBe(1));
     fireEvent.click(await screen.findByRole("button", { name: "Registrar estudo" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Registrar estudo concluído" });
@@ -804,11 +816,12 @@ describe("authentication journey", () => {
     expect(within(history).getByText("Direito Constitucional")).toBeVisible();
     expect(within(history).getByText("Direitos fundamentais")).toBeVisible();
     expect(within(history).getByText("45min")).toBeVisible();
+    await waitFor(() => expect(summaryRequests).toBe(2));
   });
 
-  it("shows exercise summaries and edits a session result without changing its duration", async () => {
+  it("opens a completed session sheet and edits all of its fields from history", async () => {
     window.history.pushState({}, "", "/ciclos");
-    document.cookie = "XSRF-TOKEN=token-edicao-exercicios; Path=/";
+    document.cookie = "XSRF-TOKEN=token-edicao-sessao; Path=/";
     const session = {
       id: "session-exercises",
       origin: "FREE",
@@ -828,20 +841,41 @@ describe("authentication journey", () => {
     };
     const updatedSession = {
       ...session,
+      subject: { id: "subject-admin", name: "Direito Administrativo" },
+      content: { id: "content-agents", name: "Agentes públicos" },
+      startedAt: "2026-07-18T12:15:00Z",
+      notes: "Revisar jurisprudência",
+      effectiveSeconds: 2700,
+      finishedAt: "2026-07-18T13:00:00Z",
+      version: 2,
       exerciseResult: { questionsAttempted: 20, questionsCorrect: 15, accuracyPercentage: 75.0 }
     };
     const summary = {
-      subjects: [{ subjectId: "subject-law", subjectName: "Direito Constitucional", questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }],
-      contents: [{ contentId: "content-rights", contentName: "Direitos fundamentais", subjectId: "subject-law", subjectName: "Direito Constitucional", questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }]
+      subjects: [{ subject: session.subject, effectiveSeconds: 1200, questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }],
+      contents: [{ content: session.content, subject: session.subject, effectiveSeconds: 1200, questionsAttempted: 10, questionsCorrect: 8, accuracyPercentage: 80.0 }]
     };
+    let historySession: Record<string, unknown> = session;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
       if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
       if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
-      if (url === "/api/study-sessions/history") return jsonResponse([session]);
-      if (url === "/api/study-sessions/exercise-summary") return jsonResponse(summary);
-      if (url === "/api/study-sessions/session-exercises/exercise-result" && init?.method === "PUT") return jsonResponse(updatedSession);
+      if (url === "/api/study-sessions/history") return jsonResponse([historySession]);
+      if (url === "/api/study-sessions/summary") return jsonResponse(summary);
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-law", name: "Direito Constitucional", archived: false },
+        { id: "subject-admin", name: "Direito Administrativo", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([
+        { id: "content-rights", subjectId: "subject-law", name: "Direitos fundamentais", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-admin/contents?status=active") return jsonResponse([
+        { id: "content-agents", subjectId: "subject-admin", name: "Agentes públicos", archived: false }
+      ]);
+      if (url === "/api/study-sessions/session-exercises" && init?.method === "PUT") {
+        historySession = updatedSession;
+        return jsonResponse(updatedSession);
+      }
       if (url === "/api/study-cycles") return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -852,25 +886,177 @@ describe("authentication journey", () => {
 
     const history = await screen.findByRole("region", { name: "Histórico recente" });
     expect(await within(history).findByText("8 de 10 questões · 80,0%")).toBeVisible();
-    const exerciseSummary = await screen.findByRole("region", { name: "Resumo de exercícios" });
+    const exerciseSummary = await screen.findByRole("region", { name: "Resumo de estudos" });
     expect(within(exerciseSummary).getByText("Direito Constitucional")).toBeVisible();
     expect(within(exerciseSummary).getAllByText("80,0% de acerto")).toHaveLength(2);
 
-    fireEvent.click(within(history).getByRole("button", { name: "Editar exercícios de Direito Constitucional" }));
-    const dialog = await screen.findByRole("dialog", { name: "Editar exercícios" });
+    fireEvent.click(await within(history).findByRole("button", { name: "Editar ficha de Direito Constitucional" }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar sessão concluída" });
+    expect(within(dialog).getByLabelText("Duração efetiva")).toHaveValue("00:20:00");
+    expect(within(dialog).getByLabelText("Anotações (opcional)")).toHaveValue("");
+
+    fireEvent.change(await within(dialog).findByLabelText("Matéria"), { target: { value: "subject-admin" } });
+    await within(dialog).findByRole("option", { name: "Agentes públicos" });
+    fireEvent.change(await within(dialog).findByLabelText("Conteúdo (opcional)"), { target: { value: "content-agents" } });
+    fireEvent.change(within(dialog).getByLabelText("Data e hora"), { target: { value: "2026-07-18T09:15" } });
+    fireEvent.change(within(dialog).getByLabelText("Duração efetiva"), { target: { value: "00:45:00" } });
+    fireEvent.change(within(dialog).getByLabelText("Anotações (opcional)"), { target: { value: "Revisar jurisprudência" } });
     fireEvent.change(within(dialog).getByLabelText("Questões realizadas"), { target: { value: "20" } });
     fireEvent.change(within(dialog).getByLabelText("Questões corretas"), { target: { value: "15" } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Salvar exercícios" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Salvar alterações" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/study-sessions/session-exercises/exercise-result",
+      "/api/study-sessions/session-exercises",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ questionsAttempted: 20, questionsCorrect: 15 })
+        body: JSON.stringify({
+          expectedVersion: 1,
+          startedAtLocal: "2026-07-18T09:15:00",
+          effectiveSeconds: 2700,
+          subjectId: "subject-admin",
+          contentId: "content-agents",
+          notes: "Revisar jurisprudência",
+          questionsAttempted: 20,
+          questionsCorrect: 15
+        })
       })
     ));
+    expect(within(history).getByText("Direito Administrativo")).toBeVisible();
+    expect(within(history).getByText("Agentes públicos")).toBeVisible();
     expect(within(history).getByText("15 de 20 questões · 75,0%")).toBeVisible();
-    expect(within(history).getByText("20min")).toBeVisible();
+    expect(within(history).getByText("45min")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/exercise-result"))).toBe(false);
+  });
+
+  it("clears the previous content immediately when the session subject changes", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-limpa-conteudo; Path=/";
+    const session = {
+      id: "session-change-subject",
+      origin: "FREE",
+      status: "FINISHED",
+      subject: { id: "subject-law", name: "Direito Constitucional" },
+      content: { id: "content-rights", name: "Direitos fundamentais" },
+      cycle: null,
+      startedAt: "2026-07-17T11:30:00Z",
+      notes: null,
+      measuredSeconds: 1200,
+      effectiveSeconds: 1200,
+      finishedAt: "2026-07-17T11:50:00Z",
+      version: 1,
+      exerciseResult: null,
+      credits: [],
+      serverNow: "2026-07-17T12:20:00Z"
+    };
+    const updated = {
+      ...session,
+      subject: { id: "subject-admin", name: "Direito Administrativo" },
+      content: null,
+      version: 2
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/study-sessions/history") return jsonResponse([session]);
+      if (url === "/api/study-sessions/summary") return jsonResponse({ subjects: [], contents: [] });
+      if (url === "/api/subjects?status=active") return jsonResponse([
+        { id: "subject-law", name: "Direito Constitucional", archived: false },
+        { id: "subject-admin", name: "Direito Administrativo", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([
+        { id: "content-rights", subjectId: "subject-law", name: "Direitos fundamentais", archived: false }
+      ]);
+      if (url === "/api/subjects/subject-admin/contents?status=active") {
+        return new Promise<Response>(() => undefined);
+      }
+      if (url === "/api/study-sessions/session-change-subject" && init?.method === "PUT") return jsonResponse(updated);
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Histórico" }));
+    const history = await screen.findByRole("region", { name: "Histórico recente" });
+    fireEvent.click(await within(history).findByRole("button", { name: "Editar ficha de Direito Constitucional" }));
+    const dialog = await screen.findByRole("dialog", { name: "Editar sessão concluída" });
+    await within(dialog).findByRole("option", { name: "Direitos fundamentais" });
+    expect(within(dialog).getByLabelText("Conteúdo (opcional)")).toHaveValue("content-rights");
+
+    fireEvent.change(within(dialog).getByLabelText("Matéria"), { target: { value: "subject-admin" } });
+    expect(within(dialog).getByLabelText("Conteúdo (opcional)")).toHaveValue("");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => {
+      const updateCall = fetchMock.mock.calls.find(([url, init]) =>
+        String(url) === "/api/study-sessions/session-change-subject" && init?.method === "PUT"
+      );
+      expect(updateCall).toBeDefined();
+      expect(JSON.parse(String(updateCall?.[1]?.body))).not.toHaveProperty("contentId");
+    });
+  });
+
+  it("deletes a completed session only after explicit confirmation", async () => {
+    window.history.pushState({}, "", "/ciclos");
+    document.cookie = "XSRF-TOKEN=token-exclusao-sessao; Path=/";
+    const session = {
+      id: "session-delete",
+      origin: "MANUAL",
+      status: "FINISHED",
+      subject: { id: "subject-law", name: "Direito Constitucional" },
+      content: null,
+      cycle: null,
+      startedAt: "2026-07-17T11:30:00Z",
+      notes: "Registro duplicado",
+      measuredSeconds: 1200,
+      effectiveSeconds: 1200,
+      finishedAt: "2026-07-17T11:50:00Z",
+      version: 3,
+      exerciseResult: null,
+      credits: [],
+      serverNow: "2026-07-17T12:20:00Z"
+    };
+    let history = [session];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
+      if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
+      if (url === "/api/study-sessions/current") return new Response(null, { status: 204 });
+      if (url === "/api/study-sessions/history") return jsonResponse(history);
+      if (url === "/api/study-sessions/summary") return jsonResponse({ subjects: [], contents: [] });
+      if (url === "/api/subjects?status=active") return jsonResponse([{ id: "subject-law", name: "Direito Constitucional", archived: false }]);
+      if (url === "/api/subjects/subject-law/contents?status=active") return jsonResponse([]);
+      if (url === "/api/study-sessions/session-delete" && init?.method === "DELETE") {
+        history = [];
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/study-cycles") return jsonResponse([]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Histórico" }));
+    const historyRegion = await screen.findByRole("region", { name: "Histórico recente" });
+    fireEvent.click(await within(historyRegion).findByRole("button", { name: "Editar ficha de Direito Constitucional" }));
+    const editDialog = await screen.findByRole("dialog", { name: "Editar sessão concluída" });
+    fireEvent.click(within(editDialog).getByRole("button", { name: "Excluir sessão" }));
+
+    const confirmation = await screen.findByRole("dialog", { name: "Excluir sessão concluída?" });
+    expect(within(confirmation).getByText("Esta ação não pode ser desfeita.")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    fireEvent.click(within(confirmation).getByRole("button", { name: "Excluir definitivamente" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/study-sessions/session-delete",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ expectedVersion: 3 })
+      })
+    ));
+    expect(await within(historyRegion).findByText("Os estudos concluídos aparecerão aqui.")).toBeVisible();
   });
 
   it("recovers a paused timer from the backend and resumes it", async () => {
@@ -939,11 +1125,17 @@ describe("authentication journey", () => {
       version: 1,
       credits: [{ runStageId: "run-stage-1", cycleId: "cycle-1", runId: "run-1", cycleStageId: "stage-1", stagePosition: 1, creditedSeconds: 2700 }]
     };
+    let summaryRequests = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/auth/bootstrap-status") return jsonResponse({ registrationRequired: false });
       if (url === "/api/auth/me") return jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" });
       if (url === "/api/study-sessions/current") return jsonResponse(activeSession);
+      if (url === "/api/study-sessions/history") return jsonResponse([]);
+      if (url === "/api/study-sessions/summary") {
+        summaryRequests += 1;
+        return jsonResponse({ subjects: [], contents: [] });
+      }
       if (url === "/api/study-sessions/session-finish/finish" && init?.method === "POST") return jsonResponse(finishedSession);
       if (url === "/api/study-cycles") return jsonResponse([]);
       throw new Error(`Unexpected request: ${url}`);
@@ -951,6 +1143,9 @@ describe("authentication journey", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Histórico" }));
+    await screen.findByRole("region", { name: "Resumo de estudos" });
+    await waitFor(() => expect(summaryRequests).toBe(1));
     const timer = await screen.findByRole("region", { name: "Cronômetro em andamento" });
     fireEvent.click(within(timer).getByRole("button", { name: "Finalizar" }));
 
@@ -982,6 +1177,7 @@ describe("authentication journey", () => {
     ));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Finalizar sessão" })).not.toBeInTheDocument());
     expect(screen.queryByRole("region", { name: "Cronômetro em andamento" })).not.toBeInTheDocument();
+    await waitFor(() => expect(summaryRequests).toBe(2));
   });
 
   it("separates overdue, today and future reviews without shifting their civil dates", async () => {

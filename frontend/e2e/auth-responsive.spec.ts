@@ -201,3 +201,61 @@ test("opens a password-reset link directly without horizontal overflow on a phon
   );
   expect(hasHorizontalOverflow).toBe(false);
 });
+
+test("keeps the completed-session editor accessible within a phone viewport", async ({ page }) => {
+  const session = {
+    id: "session-responsive",
+    origin: "FREE",
+    status: "FINISHED",
+    subject: { id: "subject-law", name: "Direito Constitucional" },
+    content: null,
+    cycle: null,
+    startedAt: "2026-07-17T11:30:00Z",
+    notes: "Anotações da sessão",
+    measuredSeconds: 1200,
+    effectiveSeconds: 1200,
+    finishedAt: "2026-07-17T11:50:00Z",
+    version: 1,
+    exerciseResult: null,
+    credits: [],
+    serverNow: "2026-07-17T12:20:00Z"
+  };
+  await page.route("**/api/auth/bootstrap-status", async (route) => {
+    await route.fulfill({ json: { registrationRequired: false } });
+  });
+  await page.route("**/api/auth/me", async (route) => {
+    await route.fulfill({ json: { id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" } });
+  });
+  await page.route("**/api/study-cycles", async (route) => {
+    await route.fulfill({ json: [] });
+  });
+  await page.route("**/api/study-sessions/current", async (route) => {
+    await route.fulfill({ status: 204 });
+  });
+  await page.route("**/api/study-sessions/history", async (route) => {
+    await route.fulfill({ json: [session] });
+  });
+  await page.route("**/api/study-sessions/summary", async (route) => {
+    await route.fulfill({ json: { subjects: [], contents: [] } });
+  });
+  await page.route("**/api/subjects?status=active", async (route) => {
+    await route.fulfill({ json: [{ id: "subject-law", name: "Direito Constitucional", archived: false }] });
+  });
+  await page.route("**/api/subjects/subject-law/contents?status=active", async (route) => {
+    await route.fulfill({ json: [] });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/ciclos");
+
+  await page.getByRole("button", { name: "Histórico" }).click();
+  await page.getByRole("button", { name: "Editar ficha de Direito Constitucional" }).click();
+  const dialog = page.getByRole("dialog", { name: "Editar sessão concluída" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Excluir sessão" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Salvar alterações" })).toBeVisible();
+
+  const hasHorizontalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+  );
+  expect(hasHorizontalOverflow).toBe(false);
+});

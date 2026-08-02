@@ -984,6 +984,12 @@ a.danger-button {
 .study-history-meta .text-button { min-height: 44px; padding: 4px 0; font-size: 10px; }
 .study-history-state { margin: 0; padding: 20px; color: var(--ink-soft); font-size: 12px; }
 .study-history > .form-error { margin: 16px 20px; }
+.edit-session-delete { margin-right: auto !important; }
+.delete-study-session-dialog { width: min(520px, calc(100vw - 32px)); }
+.delete-study-session-mark { background: var(--late-soft); color: var(--late); }
+.delete-study-session-copy { margin: 0 24px 24px; padding: 16px; border-left: 3px solid var(--late); background: var(--late-soft); }
+.delete-study-session-copy p { margin: 0; color: var(--ink); font-weight: 700; }
+.delete-study-session-copy small { display: block; margin-top: 5px; color: var(--ink-soft); line-height: 1.45; }
 
 .exercise-summary { overflow: hidden; margin-bottom: 16px; border: 1px solid color-mix(in srgb, var(--binder) 18%, var(--line)); border-radius: var(--radius-card); background: var(--paper-raised); box-shadow: var(--lift-small); }
 .exercise-summary > header { display: flex; align-items: end; justify-content: space-between; gap: 16px; padding: 18px 20px; background: color-mix(in srgb, var(--binder) 7%, var(--paper-raised)); border-bottom: 1px solid var(--line-soft); }
@@ -998,13 +1004,6 @@ a.danger-button {
 .exercise-summary article small { color: var(--ink-soft); font-size: 10px; }
 .exercise-summary article.is-content { background: color-mix(in srgb, var(--paper-inset) 55%, transparent); }
 .exercise-summary > .form-error { margin: 16px 20px; }
-
-.exercise-result-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 24px 24px; }
-.exercise-result-fields label { display: grid; gap: 7px; color: var(--ink); font-size: 11px; font-weight: 700; }
-.exercise-result-fields input { min-height: 46px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); outline: 0; background: var(--paper-inset); color: var(--ink); font: 600 16px/1 var(--font-ui); font-variant-numeric: tabular-nums; }
-.exercise-result-fields input:focus { border-color: var(--binder); box-shadow: 0 0 0 3px color-mix(in srgb, var(--binder) 16%, transparent); }
-.exercise-result-fields output,
-.exercise-result-fields > p { grid-column: 1 / -1; margin: 0; padding: 10px 12px; background: var(--marker-soft); color: var(--ink); font-size: 11px; font-weight: 700; }
 
 .study-capture-bar { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 14px; margin: -16px 0 24px; padding: 14px 16px; border-radius: var(--radius-card); background: var(--marker-soft); }
 .study-capture-mark { width: 36px; height: 44px; display: grid; place-items: center; padding-bottom: 5px; background: var(--marker); color: var(--ink); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 80%, 0 100%); font: 700 18px/1 var(--font-display); }
@@ -1696,8 +1695,10 @@ a.danger-button {
   .study-session-dialog-panel > header { grid-template-columns: 44px minmax(0, 1fr); padding: 20px; }
   .study-session-fields { padding-inline: 20px; }
   .study-session-fixed-subject { grid-template-columns: 1fr; }
-  .study-session-dialog-panel > footer { padding-inline: 20px; }
+  .study-session-dialog-panel > footer { flex-wrap: wrap; padding-inline: 20px; }
   .study-session-dialog-panel > footer button { flex: 1; }
+  .study-session-dialog-panel > footer .edit-session-delete { flex-basis: 100%; margin-right: 0 !important; }
+  .delete-study-session-copy { margin-inline: 20px; }
   .finish-session-body { padding-inline: 20px; }
   .finish-session-measured strong { font-size: 36px; }
   .manual-session-fields { padding-inline: 20px; }
@@ -1707,10 +1708,7 @@ a.danger-button {
   .study-history-meta { grid-column: 2; min-width: 0; justify-items: start; }
   .exercise-summary-grid { grid-template-columns: 1fr; }
   .exercise-summary article:nth-child(odd) { border-right: 0; }
-  .finish-session-exercises > div,
-  .exercise-result-fields { grid-template-columns: 1fr; }
-  .exercise-result-fields output,
-  .exercise-result-fields > p { grid-column: 1; }
+  .finish-session-exercises > div { grid-template-columns: 1fr; }
   .study-capture-bar { grid-template-columns: 36px minmax(0, 1fr); margin-top: 0; }
   .study-capture-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; }
   .study-capture-actions button { width: 100%; }

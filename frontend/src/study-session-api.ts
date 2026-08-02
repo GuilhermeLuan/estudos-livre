@@ -44,23 +44,33 @@ export type ExerciseResultInput = {
   questionsCorrect: number;
 };
 
-export type ExerciseSummary = {
+export type StudySessionSummary = {
   subjects: Array<{
-    subjectId: string;
-    subjectName: string;
+    subject: { id: string; name: string };
+    effectiveSeconds: number;
     questionsAttempted: number;
     questionsCorrect: number;
-    accuracyPercentage: number;
+    accuracyPercentage: number | null;
   }>;
   contents: Array<{
-    contentId: string;
-    contentName: string;
-    subjectId: string;
-    subjectName: string;
+    content: { id: string; name: string };
+    subject: { id: string; name: string };
+    effectiveSeconds: number;
     questionsAttempted: number;
     questionsCorrect: number;
-    accuracyPercentage: number;
+    accuracyPercentage: number | null;
   }>;
+};
+
+export type UpdateStudySessionInput = {
+  expectedVersion: number;
+  startedAtLocal: string;
+  effectiveSeconds: number;
+  subjectId: string;
+  contentId?: string;
+  notes?: string | null;
+  questionsAttempted?: number;
+  questionsCorrect?: number;
 };
 
 export type StartStudySessionInput =
@@ -110,23 +120,32 @@ export async function listStudySessionHistory(): Promise<StudySession[]> {
   return response.json() as Promise<StudySession[]>;
 }
 
-export async function loadExerciseSummary(): Promise<ExerciseSummary> {
-  const response = await apiFetch("/api/study-sessions/exercise-summary");
-  await requireSuccess(response, "Não foi possível calcular o resumo de exercícios.");
-  return response.json() as Promise<ExerciseSummary>;
+export async function loadStudySessionSummary(): Promise<StudySessionSummary> {
+  const response = await apiFetch("/api/study-sessions/summary");
+  await requireSuccess(response, "Não foi possível calcular o resumo de estudos.");
+  return response.json() as Promise<StudySessionSummary>;
 }
 
-export async function updateExerciseResult(
+export async function updateStudySession(
   id: string,
-  input: ExerciseResultInput
+  input: UpdateStudySessionInput
 ): Promise<StudySession> {
-  const response = await apiFetch(`/api/study-sessions/${id}/exercise-result`, {
+  const response = await apiFetch(`/api/study-sessions/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  await requireSuccess(response, "Não foi possível atualizar os exercícios.");
+  await requireSuccess(response, "Não foi possível atualizar a sessão.");
   return response.json() as Promise<StudySession>;
+}
+
+export async function deleteStudySession(id: string, expectedVersion: number): Promise<void> {
+  const response = await apiFetch(`/api/study-sessions/${id}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expectedVersion })
+  });
+  await requireSuccess(response, "Não foi possível excluir a sessão.");
 }
 
 async function transitionStudySession(id: string, action: "pause" | "resume"): Promise<StudySession> {

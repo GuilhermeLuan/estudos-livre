@@ -218,13 +218,15 @@ public class StudyCycleRepository {
 
     public void lockOwner(UUID ownerId) {
         jdbcClient.sql("""
-                        SELECT id
-                        FROM identity_user
-                        WHERE id = :ownerId
-                        FOR UPDATE
+                        SELECT 1
+                        FROM (
+                            SELECT pg_advisory_xact_lock(
+                                hashtextextended('study-owner:' || CAST(:ownerId AS TEXT), 0)
+                            )
+                        ) owner_lock
                         """)
                 .param("ownerId", ownerId)
-                .query(UUID.class)
+                .query(Integer.class)
                 .single();
     }
 
@@ -264,7 +266,7 @@ public class StudyCycleRepository {
     public void abandonCurrentRun(UUID cycleId) {
         jdbcClient.sql("""
                         UPDATE study_cycle_run
-                        SET status = 'ABANDONED', ended_at = CURRENT_TIMESTAMP,
+        SET status = 'ABANDONED', projection_abandoned = FALSE, ended_at = CURRENT_TIMESTAMP,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE cycle_id = :cycleId AND status = 'IN_PROGRESS'
                         """)
@@ -370,6 +372,107 @@ public class StudyCycleRepository {
                 .param("cycleId", cycleId)
                 .query(StudyCycleRepository::mapRun)
                 .list();
+    }
+
+    public List<StudyCycleRun> findRunsForUpdate(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT id, cycle_id, run_number, status, started_at, ended_at
+                        FROM study_cycle_run
+                        WHERE cycle_id = :cycleId
+                        ORDER BY run_number
+                        FOR UPDATE
+                        """)
+                .param("cycleId", cycleId).query(StudyCycleRepository::mapRun).list();
+    }
+
+    public List<ProjectionRun> findProjectionRunsForUpdate(UUID cycleId) {
+        return jdbcClient.sql("""
+                        SELECT id, cycle_id, run_number, status, projection_abandoned
+                        FROM study_cycle_run
+                        WHERE cycle_id = :cycleId
+                        ORDER BY run_number
+                        FOR UPDATE
+                        """)
+                .param("cycleId", cycleId)
+                .query((rs, row) -> new ProjectionRun(
+                        rs.getObject("id", UUID.class), rs.getObject("cycle_id", UUID.class),
+                        rs.getInt("run_number"), rs.getString("status"),
+                        rs.getBoolean("projection_abandoned")))
+                .list();
+    }
+
+    public Optional<StudyCycleRun> findRun(UUID runId) {
+        return jdbcClient.sql("""
+                        SELECT id, cycle_id, run_number, status, started_at, ended_at
+                        FROM study_cycle_run WHERE id = :runId
+                        """)
+                .param("runId", runId).query(StudyCycleRepository::mapRun).optional();
+    }
+
+    public void lockProjection(UUID cycleId) {
+        jdbcClient.sql("""
+                        SELECT 1
+                        FROM (
+                            SELECT pg_advisory_xact_lock(
+                                hashtextextended(CAST(:cycleId AS TEXT), 0)
+                            )
+                        ) projection_lock
+                        """)
+                .param("cycleId", cycleId)
+                .query(Integer.class)
+                .single();
+    }
+
+    public void resetRunProjection(UUID runId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run_stage SET credited_seconds = 0, updated_at = CURRENT_TIMESTAMP
+                        WHERE run_id = :runId
+                        """).param("runId", runId).update();
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run SET status = 'ABANDONED', projection_abandoned = TRUE,
+                            ended_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP WHERE id = :runId
+                        """).param("runId", runId).update();
+    }
+
+    public boolean isRunFinished(UUID runId) {
+        return jdbcClient.sql("""
+                        SELECT NOT EXISTS (
+                            SELECT 1 FROM study_cycle_run_stage
+                            WHERE run_id = :runId AND credited_seconds < target_seconds
+                        )
+                        """).param("runId", runId).query(Boolean.class).single();
+    }
+
+    public void markRunCompleted(UUID runId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run SET status = 'COMPLETED', projection_abandoned = FALSE,
+                            ended_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP WHERE id = :runId
+                        """).param("runId", runId).update();
+    }
+
+    public void markRunOpen(UUID runId, String status) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run SET status = :status, projection_abandoned = FALSE, ended_at = NULL,
+                            updated_at = CURRENT_TIMESTAMP WHERE id = :runId
+                        """).param("runId", runId).param("status", status).update();
+    }
+
+    public void markRunExplicitlyAbandoned(UUID runId) {
+        jdbcClient.sql("""
+                        UPDATE study_cycle_run
+                        SET status = 'ABANDONED', projection_abandoned = FALSE,
+                            ended_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :runId
+                        """).param("runId", runId).update();
+    }
+
+    public record ProjectionRun(
+            UUID id, UUID cycleId, int runNumber, String status, boolean projectionAbandoned) {
+        public boolean explicitlyAbandoned() {
+            return status.equals("ABANDONED") && !projectionAbandoned;
+        }
     }
 
     public Optional<StudyCycleRun> findCurrentRun(UUID cycleId) {

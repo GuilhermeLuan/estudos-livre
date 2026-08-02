@@ -7,10 +7,14 @@ import br.com.estudalivre.studysession.dto.StudySessionOrigin;
 import br.com.estudalivre.studysession.dto.StudySessionResponse;
 import br.com.estudalivre.studysession.dto.UpdateExerciseResultRequest;
 import br.com.estudalivre.studysession.dto.ExerciseSummaryResponse;
+import br.com.estudalivre.studysession.dto.StudySessionSummaryResponse;
+import br.com.estudalivre.studysession.dto.UpdateStudySessionRequest;
+import br.com.estudalivre.studysession.dto.DeleteStudySessionRequest;
 import br.com.estudalivre.studysession.model.ExerciseResult;
 import br.com.estudalivre.studysession.repository.StudySessionRepository;
 import br.com.estudalivre.studycycle.dto.StudyCycleResponse;
 import br.com.estudalivre.studycycle.dto.StudyCycleStageResponse;
+import br.com.estudalivre.studycycle.model.StudyCycleRun;
 import br.com.estudalivre.studycycle.service.StudyCycleService;
 import br.com.estudalivre.studycycle.service.StudyCreditDistributor;
 import br.com.estudalivre.studycycle.repository.StudyCycleRepository;
@@ -34,6 +38,7 @@ public class StudySessionService {
     private final SubjectService subjectService;
     private final ContentService contentService;
     private final ReviewService reviewService;
+    private final StudySessionProjectionRebuilder projectionRebuilder;
 
     public StudySessionService(
             StudySessionRepository studySessionRepository,
@@ -42,7 +47,8 @@ public class StudySessionService {
             StudyCreditDistributor studyCreditDistributor,
             SubjectService subjectService,
             ContentService contentService,
-            ReviewService reviewService) {
+            ReviewService reviewService,
+            StudySessionProjectionRebuilder projectionRebuilder) {
         this.studySessionRepository = studySessionRepository;
         this.studyCycleService = studyCycleService;
         this.studyCycleRepository = studyCycleRepository;
@@ -50,10 +56,15 @@ public class StudySessionService {
         this.subjectService = subjectService;
         this.contentService = contentService;
         this.reviewService = reviewService;
+        this.projectionRebuilder = projectionRebuilder;
     }
 
     @Transactional
     public StudySessionResponse start(UUID ownerId, StartStudySessionRequest request) {
+        if (request.origin() == StudySessionOrigin.CYCLE && request.cycleId() != null) {
+            studyCycleRepository.lockOwner(ownerId);
+            studyCycleRepository.lockProjection(request.cycleId());
+        }
         SessionContext context = request.origin() == StudySessionOrigin.CYCLE
                 ? cycleContext(ownerId, request)
                 : freeContext(ownerId, request);
@@ -96,6 +107,11 @@ public class StudySessionService {
         subjectService.getActive(ownerId, request.subjectId());
         validateOptionalContent(ownerId, request.subjectId(), request.contentId());
         var startedAt = request.startedAtLocal().atZone(ZoneId.of(timeZone)).toOffsetDateTime();
+        studyCycleRepository.lockOwner(ownerId);
+        var activeCycle = studyCycleRepository.findActiveByOwnerId(ownerId);
+        activeCycle.ifPresent(cycle -> studyCycleRepository.lockProjection(cycle.id()));
+        Optional<StudyCycleRun> currentRun =
+                activeCycle.flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()));
         UUID sessionId = UUID.randomUUID();
         studySessionRepository.createManual(
                 sessionId,
@@ -106,10 +122,10 @@ public class StudySessionService {
                 startedAt.plusSeconds(request.effectiveSeconds()),
                 request.effectiveSeconds(),
                 request.notes());
-        studyCycleRepository.findActiveByOwnerId(ownerId)
-                .flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()))
-                .ifPresent(run -> applyCreditsToRun(
-                        sessionId, run.id(), request.subjectId(), request.effectiveSeconds()));
+        currentRun.ifPresent(run -> {
+            studySessionRepository.assignProgressCycle(sessionId, run.cycleId(), run.id());
+            applyCreditsToRun(sessionId, run.id(), request.subjectId(), request.effectiveSeconds());
+        });
         return findOwned(sessionId, ownerId);
     }
 
@@ -126,6 +142,66 @@ public class StudySessionService {
         return ExerciseSummaryResponse.from(
                 studySessionRepository.findSubjectExerciseSummary(ownerId),
                 studySessionRepository.findContentExerciseSummary(ownerId));
+    }
+
+    @Transactional(readOnly = true)
+    public StudySessionSummaryResponse summary(UUID ownerId) {
+        return StudySessionSummaryResponse.from(
+                studySessionRepository.findSubjectSessionSummary(ownerId),
+                studySessionRepository.findContentSessionSummary(ownerId));
+    }
+
+    @Transactional
+    public StudySessionResponse update(
+            UUID ownerId,
+            String timeZone,
+            UUID sessionId,
+            UpdateStudySessionRequest request) {
+        Optional<StudySessionRepository.ProjectionContext> initialProjectionContext =
+                studySessionRepository.findProjectionContext(sessionId, ownerId);
+        initialProjectionContext.ifPresent(context -> studyCycleRepository.lockProjection(context.cycleId()));
+        Optional<StudySessionRepository.ProjectionContext> projectionContext =
+                studySessionRepository.findProjectionContext(sessionId, ownerId);
+        projectionContext.filter(context -> studySessionRepository.hasOpenCycleSession(context.cycleId()))
+                .ifPresent(context -> { throw new StudySessionConflictException(); });
+        subjectService.getActive(ownerId, request.subjectId());
+        validateOptionalContent(ownerId, request.subjectId(), request.contentId());
+        Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
+                request.questionsAttempted(), request.questionsCorrect());
+        var startedAt = request.startedAtLocal().atZone(ZoneId.of(timeZone)).toOffsetDateTime();
+        if (studySessionRepository.updateFinished(
+                sessionId, ownerId, request.expectedVersion(), startedAt,
+                request.effectiveSeconds(), request.subjectId(), request.contentId(), request.notes()) != 1) {
+            if (studySessionRepository.findByIdAndOwnerId(sessionId, ownerId).isEmpty()) {
+                throw new StudySessionNotFoundException();
+            }
+            throw new StudySessionConflictException();
+        }
+        exerciseResult.ifPresentOrElse(
+                result -> studySessionRepository.saveExerciseResult(sessionId, result),
+                () -> studySessionRepository.deleteExerciseResult(sessionId));
+        projectionContext.ifPresent(context ->
+                projectionRebuilder.rebuild(ownerId, context.cycleId(), context.runId()));
+        return findOwned(sessionId, ownerId);
+    }
+
+    @Transactional
+    public void delete(UUID ownerId, UUID sessionId, DeleteStudySessionRequest request) {
+        Optional<StudySessionRepository.ProjectionContext> initialProjectionContext =
+                studySessionRepository.findProjectionContext(sessionId, ownerId);
+        initialProjectionContext.ifPresent(context -> studyCycleRepository.lockProjection(context.cycleId()));
+        Optional<StudySessionRepository.ProjectionContext> projectionContext =
+                studySessionRepository.findProjectionContext(sessionId, ownerId);
+        projectionContext.filter(context -> studySessionRepository.hasOpenCycleSession(context.cycleId()))
+                .ifPresent(context -> { throw new StudySessionConflictException(); });
+        if (studySessionRepository.deleteFinished(sessionId, ownerId, request.expectedVersion()) != 1) {
+            if (studySessionRepository.findByIdAndOwnerId(sessionId, ownerId).isEmpty()) {
+                throw new StudySessionNotFoundException();
+            }
+            throw new StudySessionConflictException();
+        }
+        projectionContext.ifPresent(context ->
+                projectionRebuilder.rebuild(ownerId, context.cycleId(), context.runId()));
     }
 
     @Transactional
@@ -160,6 +236,19 @@ public class StudySessionService {
             String timeZone,
             UUID sessionId,
             FinishStudySessionRequest request) {
+        var unlockedSession = studySessionRepository.findByIdAndOwnerId(sessionId, ownerId)
+                .orElseThrow(StudySessionNotFoundException::new);
+        Optional<StudyCycleRun> fallbackRun = Optional.empty();
+        Optional<StudySessionRepository.ProjectionContext> projectionContext =
+                studySessionRepository.findProjectionContext(sessionId, ownerId);
+        if (projectionContext.isPresent()) {
+            studyCycleRepository.lockProjection(projectionContext.orElseThrow().cycleId());
+        } else if (unlockedSession.origin().equals("REVIEW") || unlockedSession.origin().equals("FREE")) {
+            studyCycleRepository.lockOwner(ownerId);
+            var activeCycle = studyCycleRepository.findActiveByOwnerId(ownerId);
+            activeCycle.ifPresent(cycle -> studyCycleRepository.lockProjection(cycle.id()));
+            fallbackRun = activeCycle.flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()));
+        }
         Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
                 request.questionsAttempted(), request.questionsCorrect());
         var state = studySessionRepository.findFinishStateForUpdate(sessionId, ownerId)
@@ -185,11 +274,11 @@ public class StudySessionService {
         if (state.cycleRunId() != null) {
             applyCreditsToRun(
                     sessionId, state.cycleRunId(), state.subjectId(), request.effectiveSeconds());
-        } else if (state.origin().equals("REVIEW")) {
-            studyCycleRepository.findActiveByOwnerId(ownerId)
-                    .flatMap(cycle -> studyCycleRepository.findCurrentRun(cycle.id()))
-                    .ifPresent(run -> applyCreditsToRun(
-                            sessionId, run.id(), state.subjectId(), request.effectiveSeconds()));
+        } else if (state.origin().equals("REVIEW") || state.origin().equals("FREE")) {
+            fallbackRun.ifPresent(run -> {
+                        studySessionRepository.assignProgressCycle(sessionId, run.cycleId(), run.id());
+                        applyCreditsToRun(sessionId, run.id(), state.subjectId(), request.effectiveSeconds());
+                    });
         }
         exerciseResult.ifPresent(result -> studySessionRepository.saveExerciseResult(sessionId, result));
         completeReview(ownerId, sessionId, state);
@@ -232,10 +321,12 @@ public class StudySessionService {
             UpdateExerciseResultRequest request) {
         Optional<ExerciseResult> exerciseResult = ExerciseResult.optional(
                 request.questionsAttempted(), request.questionsCorrect());
-        String status = lockOwnedStatus(sessionId, ownerId);
-        if (!status.equals("FINISHED")) {
-            throw new InvalidStudySessionTransitionException(
-                    "Somente uma sessão finalizada pode ter seus exercícios editados.");
+        if (studySessionRepository.advanceFinishedVersion(
+                sessionId, ownerId, request.expectedVersion()) != 1) {
+            if (studySessionRepository.findByIdAndOwnerId(sessionId, ownerId).isEmpty()) {
+                throw new StudySessionNotFoundException();
+            }
+            throw new StudySessionConflictException();
         }
         if (exerciseResult.isPresent()) {
             studySessionRepository.saveExerciseResult(sessionId, exerciseResult.orElseThrow());
@@ -250,6 +341,9 @@ public class StudySessionService {
             UUID runId,
             UUID subjectId,
             long effectiveSeconds) {
+        var run = studyCycleRepository.findRun(runId)
+                .orElseThrow(StudySessionFinishConflictException::new);
+        studyCycleRepository.lockProjection(run.cycleId());
         var runStages = studyCycleRepository.findRunStagesForUpdate(runId);
         var distribution = studyCreditDistributor.distribute(runStages, subjectId, effectiveSeconds);
         distribution.allocations().forEach(allocation -> {

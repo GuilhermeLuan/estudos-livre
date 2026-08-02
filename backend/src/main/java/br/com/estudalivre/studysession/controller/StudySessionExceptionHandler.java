@@ -5,6 +5,7 @@ import br.com.estudalivre.studysession.service.OpenStudySessionAlreadyExistsExce
 import br.com.estudalivre.studysession.service.StudyCycleIsNotActiveException;
 import br.com.estudalivre.studysession.service.StudySessionNotFoundException;
 import br.com.estudalivre.studysession.service.StudySessionFinishConflictException;
+import br.com.estudalivre.studysession.service.StudySessionConflictException;
 import br.com.estudalivre.studycycle.service.StudyCycleNotFoundException;
 import br.com.estudalivre.subject.service.ContentNotFoundException;
 import br.com.estudalivre.subject.service.SubjectNotFoundException;
@@ -35,6 +36,11 @@ public class StudySessionExceptionHandler {
     @ExceptionHandler(StudySessionFinishConflictException.class)
     ProblemDetail finishConflict(StudySessionFinishConflictException exception) {
         return problem(HttpStatus.CONFLICT, "Finalização da sessão está desatualizada", "study-session-finish-conflict", exception);
+    }
+
+    @ExceptionHandler(StudySessionConflictException.class)
+    ProblemDetail sessionConflict(StudySessionConflictException exception) {
+        return problem(HttpStatus.CONFLICT, "Sessão de estudo desatualizada", "study-session-conflict", exception);
     }
 
     @ExceptionHandler(StudyCycleIsNotActiveException.class)
