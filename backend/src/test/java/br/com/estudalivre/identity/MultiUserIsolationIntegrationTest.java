@@ -216,7 +216,7 @@ class MultiUserIsolationIntegrationTest {
         mockMvc.perform(withSessionAndCsrf(
                         put("/api/study-sessions/{id}/exercise-result", firstStudySessionId)
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"questionsAttempted\":10,\"questionsCorrect\":8}"),
+                                .content("{\"expectedVersion\":0,\"questionsAttempted\":10,\"questionsCorrect\":8}"),
                         second.session(),
                         second.csrf()))
                 .andExpect(status().isNotFound())
