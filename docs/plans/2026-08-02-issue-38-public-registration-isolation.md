@@ -18,6 +18,7 @@ O trabalho não cria outro modelo de autenticação. Ele comprova, pelas APIs p�
 - Um identificador de outra conta deve ser indistinguível de um recurso inexistente nas operações de leitura e mutação.
 - As restrições por conta são independentes: ciclo ativo, sessão aberta e fila de revisões de uma pessoa não bloqueiam outra.
 - Fechar o cadastro impede apenas novas contas; contas existentes continuam autenticando normalmente.
+- O caminho direto até a origem não pode contornar o Cloudflare Access: o Compose vincula a porta ao loopback por padrão e uma exposição em rede privada exige firewall equivalente.
 
 ## Fluxo de dados
 
@@ -32,6 +33,8 @@ Os testes podem usar o banco apenas para limpeza isolada do cenário, seguindo a
 3. **Acesso direto privado:** UUIDs conhecidos de recursos alheios não permitem leitura ou mutação.
 4. **Fluxos independentes:** as duas contas conseguem manter estado de estudo independente.
 5. **Operação em produção:** documentar cadastro público, URL externa e reconhecimento do HTTPS encaminhado pelo proxy confiável.
+
+A verificação operacional também deve confirmar que a porta publicada usa `APP_BIND_ADDRESS=127.0.0.1` por padrão. `Protect with Access` valida o caminho atendido pelo túnel, mas não substitui o bloqueio de uma rota direta à origem.
 
 Cada fatia segue um ciclo RED→GREEN. Se uma caracterização do comportamento já implementado ficar verde imediatamente, o resultado é registrado e nenhuma alteração especulativa de produção é feita. Falhas de autorização ou persistência retornam ao orquestrador para diagnóstico e correção sensível.
 
