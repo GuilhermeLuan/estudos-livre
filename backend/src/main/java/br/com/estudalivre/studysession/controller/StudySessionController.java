@@ -7,6 +7,9 @@ import br.com.estudalivre.studysession.dto.FinishStudySessionRequest;
 import br.com.estudalivre.studysession.dto.StudySessionResponse;
 import br.com.estudalivre.studysession.dto.UpdateExerciseResultRequest;
 import br.com.estudalivre.studysession.dto.ExerciseSummaryResponse;
+import br.com.estudalivre.studysession.dto.StudySessionSummaryResponse;
+import br.com.estudalivre.studysession.dto.UpdateStudySessionRequest;
+import br.com.estudalivre.studysession.dto.DeleteStudySessionRequest;
 import br.com.estudalivre.studysession.service.StudySessionService;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -21,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 
 @RestController
 @RequestMapping("/api/study-sessions")
@@ -67,6 +71,29 @@ public class StudySessionController {
     public ExerciseSummaryResponse exerciseSummary(
             @AuthenticationPrincipal IdentityPrincipal principal) {
         return studySessionService.exerciseSummary(principal.id());
+    }
+
+    @GetMapping("/summary")
+    public StudySessionSummaryResponse summary(
+            @AuthenticationPrincipal IdentityPrincipal principal) {
+        return studySessionService.summary(principal.id());
+    }
+
+    @PutMapping("/{id}")
+    public StudySessionResponse update(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateStudySessionRequest request) {
+        return studySessionService.update(principal.id(), principal.timeZone(), id, request);
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(
+            @AuthenticationPrincipal IdentityPrincipal principal,
+            @PathVariable UUID id,
+            @Valid @RequestBody DeleteStudySessionRequest request) {
+        studySessionService.delete(principal.id(), id, request);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/pause")

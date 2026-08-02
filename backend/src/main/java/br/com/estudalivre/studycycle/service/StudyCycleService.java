@@ -156,6 +156,8 @@ public class StudyCycleService {
         studyCycleRepository.lockOwner(ownerId);
         var activeCycle = studyCycleRepository.findActiveByOwnerId(ownerId)
                 .filter(current -> !current.id().equals(cycleId));
+        activeCycle.ifPresent(current -> studyCycleRepository.lockProjection(current.id()));
+        studyCycleRepository.lockProjection(cycleId);
         if (activeCycle.isPresent() && currentRunAction == null) {
             throw new StudyCycleSwitchDecisionRequiredException();
         }
