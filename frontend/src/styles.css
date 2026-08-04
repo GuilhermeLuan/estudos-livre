@@ -531,8 +531,26 @@ a.danger-button {
 .archive-action:hover,
 .delete-action:hover { background: var(--late-soft); }
 .archive-confirmation { display: flex; align-items: center; gap: 4px; padding-left: 8px; border-left: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; font-weight: 700; }
-.delete-confirmation { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-left: 8px; border-left: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; font-weight: 700; }
-.delete-confirmation small { flex-basis: 100%; color: var(--ink-faint); font-size: 10px; font-weight: 500; }
+.subject-delete-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+  margin-top: 2px;
+  padding: 14px 16px 14px 18px;
+  border: 1px solid color-mix(in srgb, var(--late) 22%, var(--line));
+  border-radius: var(--radius-card);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--late-soft) 72%, var(--paper-raised)), var(--paper-raised));
+  box-shadow: inset 3px 0 0 var(--late);
+  animation: settle-in 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+.subject-delete-copy { display: grid; gap: 3px; }
+.subject-delete-copy strong { color: var(--ink); font: 700 15px/1.25 var(--font-display); letter-spacing: -0.01em; }
+.subject-delete-copy span { color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
+.subject-delete-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.subject-delete-actions .text-button,
+.subject-delete-actions .danger-button { min-height: 40px; padding: 8px 12px; }
 .row-error { grid-column: 2 / -1; width: 100%; }
 
 .subjects-empty,
@@ -1641,8 +1659,9 @@ a.danger-button {
   .subject-edit-form .row-actions { justify-content: stretch; }
   .subject-edit-form .row-actions button { flex: 1; width: auto; }
   .archive-confirmation { width: 100%; justify-content: flex-end; padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--line-soft); }
-  .delete-confirmation { width: 100%; justify-content: flex-end; padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--line-soft); }
-  .delete-confirmation small { text-align: left; }
+  .subject-delete-panel { grid-template-columns: 1fr; gap: 10px; margin-top: 4px; padding: 14px; }
+  .subject-delete-actions { justify-content: stretch; }
+  .subject-delete-actions button { flex: 1; }
   .row-error { grid-column: 1 / -1; }
   .content-heading { margin-bottom: 24px; }
   .catalog-back-link { margin-bottom: 8px; }
