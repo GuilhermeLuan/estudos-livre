@@ -526,9 +526,13 @@ a.danger-button {
 .subject-edit-form { grid-column: 2 / -1; grid-template-columns: minmax(220px, 1fr) auto; align-items: end; }
 .subject-edit-form .form-error,
 .subject-edit-form > .field-error { grid-column: 1 / -1; }
-.archive-action { color: var(--late); }
-.archive-action:hover { background: var(--late-soft); }
+.archive-action,
+.delete-action { color: var(--late); }
+.archive-action:hover,
+.delete-action:hover { background: var(--late-soft); }
 .archive-confirmation { display: flex; align-items: center; gap: 4px; padding-left: 8px; border-left: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.delete-confirmation { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-left: 8px; border-left: 1px solid var(--line); color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.delete-confirmation small { flex-basis: 100%; color: var(--ink-faint); font-size: 10px; font-weight: 500; }
 .row-error { grid-column: 2 / -1; width: 100%; }
 
 .subjects-empty,
@@ -1637,6 +1641,8 @@ a.danger-button {
   .subject-edit-form .row-actions { justify-content: stretch; }
   .subject-edit-form .row-actions button { flex: 1; width: auto; }
   .archive-confirmation { width: 100%; justify-content: flex-end; padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--line-soft); }
+  .delete-confirmation { width: 100%; justify-content: flex-end; padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--line-soft); }
+  .delete-confirmation small { text-align: left; }
   .row-error { grid-column: 1 / -1; }
   .content-heading { margin-bottom: 24px; }
   .catalog-back-link { margin-bottom: 8px; }

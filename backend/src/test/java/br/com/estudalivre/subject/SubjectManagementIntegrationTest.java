@@ -1,6 +1,7 @@
 package br.com.estudalivre.subject;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -51,9 +52,107 @@ class SubjectManagementIntegrationTest {
 
     private void cleanDatabase() {
         jdbcTemplate.update("DELETE FROM spring_session");
+        jdbcTemplate.update("DELETE FROM study_session_exercise_result");
+        jdbcTemplate.update("DELETE FROM study_session_timer_segment");
+        jdbcTemplate.update("DELETE FROM study_session_credit");
         jdbcTemplate.update("DELETE FROM study_session");
+        jdbcTemplate.update("DELETE FROM review_occurrence");
+        jdbcTemplate.update("DELETE FROM review_plan");
+        jdbcTemplate.update("DELETE FROM study_cycle_suggestion_subject");
+        jdbcTemplate.update("DELETE FROM study_cycle_run_stage");
+        jdbcTemplate.update("DELETE FROM study_cycle_run");
+        jdbcTemplate.update("DELETE FROM study_cycle_stage");
+        jdbcTemplate.update("DELETE FROM study_cycle");
+        jdbcTemplate.update("DELETE FROM content");
         jdbcTemplate.update("DELETE FROM subject");
         jdbcTemplate.update("DELETE FROM identity_user");
+    }
+
+    @Test
+    void ownerPermanentlyDeletesAnUnusedSubjectAndItsContents() throws Exception {
+        IdentityPrincipal principal = createUser("pessoa@example.com");
+        UUID subjectId = createSubject(principal, "Língua Portuguesa");
+        UUID activeContentId = createContent(principal, subjectId, "Concordância verbal");
+        UUID archivedContentId = createContent(principal, subjectId, "Regência verbal");
+
+        mockMvc.perform(withSpaCsrf(post("/api/subjects/{subjectId}/contents/{contentId}/archive",
+                        subjectId, archivedContentId)
+                        .with(user(principal))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(withSpaCsrf(delete("/api/subjects/{id}", subjectId)
+                        .with(user(principal))))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/subjects/{id}", subjectId).with(user(principal)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/subjects").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(get("/api/subjects").param("status", "archived").with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+        mockMvc.perform(get("/api/subjects/{subjectId}/contents/{contentId}", subjectId, activeContentId)
+                        .with(user(principal)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/subjects/{subjectId}/contents/{contentId}", subjectId, archivedContentId)
+                        .with(user(principal)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void anotherUserCannotDeleteTheOwnerSubjectOrLearnItExists() throws Exception {
+        IdentityPrincipal owner = createUser("dona@example.com");
+        IdentityPrincipal otherUser = createUser("outra@example.com");
+        UUID subjectId = createSubject(owner, "Direito Constitucional");
+
+        mockMvc.perform(withSpaCsrf(delete("/api/subjects/{id}", subjectId)
+                        .with(user(otherUser))))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.title").value("Matéria não encontrada"));
+
+        mockMvc.perform(get("/api/subjects/{id}", subjectId).with(user(owner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(subjectId.toString()));
+        mockMvc.perform(get("/api/subjects").with(user(owner)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(subjectId.toString()));
+    }
+
+    @Test
+    void subjectUsedInAStudyCycleReturnsConflictAndKeepsTheSubjectAndContents() throws Exception {
+        IdentityPrincipal principal = createUser("pessoa@example.com");
+        UUID subjectId = createSubject(principal, "Direito Constitucional");
+        UUID contentId = createContent(principal, subjectId, "Controle de constitucionalidade");
+        UUID cycleId = createStudyCycle(principal, "Ciclo jurídico");
+
+        mockMvc.perform(withSpaCsrf(put("/api/study-cycles/{id}", cycleId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":"Ciclo jurídico",
+                                  "stages":[{"subjectId":"%s","targetMinutes":60}]
+                                }
+                                """.formatted(subjectId))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(withSpaCsrf(delete("/api/subjects/{id}", subjectId)
+                        .with(user(principal))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Matéria em uso"))
+                .andExpect(jsonPath("$.type").value("https://estudalivre.local/problems/subject-in-use"))
+                .andExpect(jsonPath("$.detail").value(
+                        "Esta matéria já foi usada em um ciclo, sessão de estudo ou revisão. Arquive-a para preservar o histórico."));
+
+        mockMvc.perform(get("/api/subjects/{id}", subjectId).with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(subjectId.toString()));
+        mockMvc.perform(get("/api/subjects/{subjectId}/contents/{contentId}", subjectId, contentId)
+                        .with(user(principal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(contentId.toString()));
     }
 
     @Test
@@ -207,6 +306,30 @@ class SubjectManagementIntegrationTest {
 
     private UUID createSubject(IdentityPrincipal principal, String name) throws Exception {
         String body = mockMvc.perform(withSpaCsrf(post("/api/subjects")
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\"}")))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return UUID.fromString(JsonPath.read(body, "$.id"));
+    }
+
+    private UUID createContent(IdentityPrincipal principal, UUID subjectId, String name) throws Exception {
+        String body = mockMvc.perform(withSpaCsrf(post("/api/subjects/{subjectId}/contents", subjectId)
+                        .with(user(principal))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\"}")))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return UUID.fromString(JsonPath.read(body, "$.id"));
+    }
+
+    private UUID createStudyCycle(IdentityPrincipal principal, String name) throws Exception {
+        String body = mockMvc.perform(withSpaCsrf(post("/api/study-cycles")
                         .with(user(principal))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"" + name + "\"}")))

@@ -7,6 +7,7 @@ import br.com.estudalivre.subject.model.SubjectStatus;
 import br.com.estudalivre.subject.repository.SubjectRepository;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,6 +74,19 @@ public class SubjectService {
             throw new SubjectNotFoundException();
         }
         return SubjectResponse.from(findOwned(subjectId, ownerId));
+    }
+
+    @Transactional
+    public void delete(UUID ownerId, UUID subjectId) {
+        findOwned(subjectId, ownerId);
+        try {
+            subjectRepository.deleteContentsBySubjectId(subjectId);
+            if (subjectRepository.deleteByIdAndOwnerId(subjectId, ownerId) == 0) {
+                throw new SubjectNotFoundException();
+            }
+        } catch (DataIntegrityViolationException exception) {
+            throw new SubjectInUseException();
+        }
     }
 
     private Subject findOwned(UUID subjectId, UUID ownerId) {

@@ -1,5 +1,6 @@
 package br.com.estudalivre.subject.controller;
 
+import br.com.estudalivre.subject.service.SubjectInUseException;
 import br.com.estudalivre.subject.service.SubjectNotFoundException;
 import java.net.URI;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,14 @@ public class SubjectExceptionHandler {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, exception.getMessage());
         problem.setTitle("Matéria não encontrada");
         problem.setType(URI.create("https://estudalivre.local/problems/subject-not-found"));
+        return problem;
+    }
+
+    @ExceptionHandler(SubjectInUseException.class)
+    ProblemDetail subjectInUse(SubjectInUseException exception) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, exception.getMessage());
+        problem.setTitle("Matéria em uso");
+        problem.setType(URI.create("https://estudalivre.local/problems/subject-in-use"));
         return problem;
     }
 }
