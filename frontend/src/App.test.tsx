@@ -258,6 +258,62 @@ describe("authentication journey", () => {
     expect(await screen.findByText("Matemática")).toBeVisible();
   });
 
+  it("confirms permanent subject deletion and removes it without reloading", async () => {
+    window.history.pushState({}, "", "/materias");
+    document.cookie = "XSRF-TOKEN=token-materia; Path=/";
+    const subject = {
+      id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      name: "Matemática",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse([subject]))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Excluir Matemática" }));
+    expect(screen.getByText("Excluir permanentemente?"))
+      .toBeVisible();
+    expect(screen.getByText(/conteúdos serão removidos/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
+
+    await waitFor(() => expect(screen.queryByText("Matemática")).not.toBeInTheDocument());
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/subjects/4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      expect.objectContaining({ method: "DELETE" })
+    );
+  });
+
+  it("keeps a subject and shows the backend detail when deletion conflicts", async () => {
+    window.history.pushState({}, "", "/materias");
+    const subject = {
+      id: "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51",
+      name: "Direito Constitucional",
+      archived: false,
+      createdAt: "2026-07-16T12:00:00Z",
+      updatedAt: "2026-07-16T12:00:00Z"
+    };
+    const detail = "Esta matéria já foi usada em um ciclo. Arquive-a para preservar o histórico.";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ registrationRequired: false }))
+      .mockResolvedValueOnce(jsonResponse({ id: "user", email: "pessoa@example.com", timeZone: "America/Sao_Paulo" }))
+      .mockResolvedValueOnce(jsonResponse([subject]))
+      .mockResolvedValueOnce(jsonResponse({ detail }, 409));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "Excluir Direito Constitucional" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(detail);
+    expect(screen.getByText("Direito Constitucional")).toBeVisible();
+  });
+
   it("opens the selected subject content catalog", async () => {
     const subjectId = "4b89b888-5b2b-49f7-b82c-f8fc30cdcc51";
     window.history.pushState({}, "", `/materias/${subjectId}/conteudos`);

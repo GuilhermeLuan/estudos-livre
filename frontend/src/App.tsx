@@ -13,7 +13,7 @@ import {
   login,
   logout
 } from "./auth-api";
-import { archiveSubject, createSubject, getSubject, listSubjects, restoreSubject, Subject, SubjectStatus, updateSubject } from "./subject-api";
+import { archiveSubject, createSubject, deleteSubject, getSubject, listSubjects, restoreSubject, Subject, SubjectStatus, updateSubject } from "./subject-api";
 import {
   archiveContent,
   ContentStatus,
@@ -2234,6 +2234,7 @@ function SubjectRow({ subject }: { subject: Subject }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(subject.name);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const updateMutation = useMutation({
     mutationFn: () => updateSubject(subject.id, name),
     onSuccess: (updated) => {
@@ -2257,6 +2258,18 @@ function SubjectRow({ subject }: { subject: Subject }) {
           .sort((first, second) => first.name.localeCompare(second.name, "pt-BR", { sensitivity: "base" }))
       );
       setConfirmingArchive(false);
+    }
+  });
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteSubject(subject.id),
+    onSuccess: () => {
+      queryClient.setQueryData<Subject[]>(["subjects", "active"], (current = []) =>
+        current.filter((item) => item.id !== subject.id)
+      );
+      queryClient.setQueryData<Subject[]>(["subjects", "archived"], (current = []) =>
+        current.filter((item) => item.id !== subject.id)
+      );
+      setConfirmingDelete(false);
     }
   });
 
@@ -2286,8 +2299,18 @@ function SubjectRow({ subject }: { subject: Subject }) {
           <div className="row-actions">
             <Link className="text-button row-link" to={`/materias/${subject.id}/conteudos`}>Ver conteúdos</Link>
             <button className="text-button" type="button" aria-label={`Editar ${subject.name}`} onClick={() => setEditing(true)}>Editar</button>
-            {subject.archived ? (
-              <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${subject.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Restaurando…" : "Restaurar"}</button>
+            {confirmingDelete ? (
+              <span className="delete-confirmation">
+                <span>Excluir permanentemente?</span>
+                <small>Esta ação é permanente e os conteúdos serão removidos.</small>
+                <button className="text-button" type="button" onClick={() => setConfirmingDelete(false)} disabled={deleteMutation.isPending}>Cancelar</button>
+                <button className="danger-button" type="button" aria-label="Confirmar exclusão" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>{deleteMutation.isPending ? "Excluindo…" : "Confirmar exclusão"}</button>
+              </span>
+            ) : subject.archived ? (
+              <>
+                <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${subject.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Restaurando…" : "Restaurar"}</button>
+                <button className="text-button delete-action" type="button" aria-label={`Excluir ${subject.name}`} onClick={() => { setConfirmingArchive(false); setConfirmingDelete(true); }}>Excluir</button>
+              </>
             ) : confirmingArchive ? (
               <span className="archive-confirmation">
                 <span>Arquivar?</span>
@@ -2295,10 +2318,14 @@ function SubjectRow({ subject }: { subject: Subject }) {
                 <button className="danger-button" type="button" aria-label="Confirmar arquivamento" onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Arquivando…" : "Confirmar"}</button>
               </span>
             ) : (
-              <button className="text-button archive-action" type="button" aria-label={`Arquivar ${subject.name}`} onClick={() => setConfirmingArchive(true)}>Arquivar</button>
+              <>
+                <button className="text-button archive-action" type="button" aria-label={`Arquivar ${subject.name}`} onClick={() => { setConfirmingDelete(false); setConfirmingArchive(true); }}>Arquivar</button>
+                <button className="text-button delete-action" type="button" aria-label={`Excluir ${subject.name}`} onClick={() => { setConfirmingArchive(false); setConfirmingDelete(true); }}>Excluir</button>
+              </>
             )}
           </div>
           {stateMutation.isError && <p className="form-error row-error" role="alert">{stateMutation.error instanceof ApiError ? stateMutation.error.message : "Não foi possível alterar o estado da matéria."}</p>}
+          {deleteMutation.isError && <p className="form-error row-error" role="alert">{deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Não foi possível excluir a matéria."}</p>}
         </>
       )}
     </article>

@@ -53,3 +53,8 @@ export async function restoreSubject(id: string): Promise<Subject> {
   await requireSuccess(response, "Não foi possível restaurar a matéria.");
   return response.json() as Promise<Subject>;
 }
+
+export async function deleteSubject(id: string): Promise<void> {
+  const response = await apiFetch(`/api/subjects/${id}`, { method: "DELETE" });
+  await requireSuccess(response, "Não foi possível excluir a matéria.");
+}

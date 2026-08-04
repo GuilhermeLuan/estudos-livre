@@ -102,6 +102,25 @@ public class SubjectRepository {
                 .update();
     }
 
+    public int deleteContentsBySubjectId(UUID subjectId) {
+        return jdbcClient.sql("""
+                        DELETE FROM content
+                        WHERE subject_id = :subjectId
+                        """)
+                .param("subjectId", subjectId)
+                .update();
+    }
+
+    public int deleteByIdAndOwnerId(UUID id, UUID ownerId) {
+        return jdbcClient.sql("""
+                        DELETE FROM subject
+                        WHERE id = :id AND owner_id = :ownerId
+                        """)
+                .param("id", id)
+                .param("ownerId", ownerId)
+                .update();
+    }
+
     private static Subject mapSubject(ResultSet resultSet, int rowNumber) throws SQLException {
         return new Subject(
                 resultSet.getObject("id", UUID.class),
