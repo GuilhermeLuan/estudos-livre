@@ -2299,18 +2299,8 @@ function SubjectRow({ subject }: { subject: Subject }) {
           <div className="row-actions">
             <Link className="text-button row-link" to={`/materias/${subject.id}/conteudos`}>Ver conteúdos</Link>
             <button className="text-button" type="button" aria-label={`Editar ${subject.name}`} onClick={() => setEditing(true)}>Editar</button>
-            {confirmingDelete ? (
-              <span className="delete-confirmation">
-                <span>Excluir permanentemente?</span>
-                <small>Esta ação é permanente e os conteúdos serão removidos.</small>
-                <button className="text-button" type="button" onClick={() => setConfirmingDelete(false)} disabled={deleteMutation.isPending}>Cancelar</button>
-                <button className="danger-button" type="button" aria-label="Confirmar exclusão" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>{deleteMutation.isPending ? "Excluindo…" : "Confirmar exclusão"}</button>
-              </span>
-            ) : subject.archived ? (
-              <>
-                <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${subject.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Restaurando…" : "Restaurar"}</button>
-                <button className="text-button delete-action" type="button" aria-label={`Excluir ${subject.name}`} onClick={() => { setConfirmingArchive(false); setConfirmingDelete(true); }}>Excluir</button>
-              </>
+            {!confirmingDelete && (subject.archived ? (
+              <button className="secondary-button compact-button" type="button" aria-label={`Restaurar ${subject.name}`} onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Restaurando…" : "Restaurar"}</button>
             ) : confirmingArchive ? (
               <span className="archive-confirmation">
                 <span>Arquivar?</span>
@@ -2318,12 +2308,24 @@ function SubjectRow({ subject }: { subject: Subject }) {
                 <button className="danger-button" type="button" aria-label="Confirmar arquivamento" onClick={() => stateMutation.mutate()} disabled={stateMutation.isPending}>{stateMutation.isPending ? "Arquivando…" : "Confirmar"}</button>
               </span>
             ) : (
-              <>
-                <button className="text-button archive-action" type="button" aria-label={`Arquivar ${subject.name}`} onClick={() => { setConfirmingDelete(false); setConfirmingArchive(true); }}>Arquivar</button>
-                <button className="text-button delete-action" type="button" aria-label={`Excluir ${subject.name}`} onClick={() => { setConfirmingArchive(false); setConfirmingDelete(true); }}>Excluir</button>
-              </>
+              <button className="text-button archive-action" type="button" aria-label={`Arquivar ${subject.name}`} onClick={() => { setConfirmingDelete(false); setConfirmingArchive(true); }}>Arquivar</button>
+            ))}
+            {!confirmingDelete && !confirmingArchive && (
+              <button className="text-button delete-action" type="button" aria-label={`Excluir ${subject.name}`} onClick={() => { deleteMutation.reset(); setConfirmingArchive(false); setConfirmingDelete(true); }}>Excluir</button>
             )}
           </div>
+          {confirmingDelete && (
+            <section className="subject-delete-panel" role="group" aria-labelledby={`delete-subject-${subject.id}`}>
+              <div className="subject-delete-copy">
+                <strong id={`delete-subject-${subject.id}`}>Excluir “{subject.name}”?</strong>
+                <span>Todos os conteúdos desta matéria também serão removidos. Esta ação não pode ser desfeita.</span>
+              </div>
+              <div className="subject-delete-actions">
+                <button className="text-button" type="button" onClick={() => { deleteMutation.reset(); setConfirmingDelete(false); }} disabled={deleteMutation.isPending}>Cancelar</button>
+                <button className="danger-button" type="button" aria-label="Confirmar exclusão" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>{deleteMutation.isPending ? "Excluindo…" : "Excluir matéria"}</button>
+              </div>
+            </section>
+          )}
           {stateMutation.isError && <p className="form-error row-error" role="alert">{stateMutation.error instanceof ApiError ? stateMutation.error.message : "Não foi possível alterar o estado da matéria."}</p>}
           {deleteMutation.isError && <p className="form-error row-error" role="alert">{deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Não foi possível excluir a matéria."}</p>}
         </>

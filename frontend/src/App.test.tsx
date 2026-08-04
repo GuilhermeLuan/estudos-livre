@@ -277,9 +277,9 @@ describe("authentication journey", () => {
 
     renderApp();
     fireEvent.click(await screen.findByRole("button", { name: "Excluir Matemática" }));
-    expect(screen.getByText("Excluir permanentemente?"))
+    expect(screen.getByText("Excluir “Matemática”?"))
       .toBeVisible();
-    expect(screen.getByText(/conteúdos serão removidos/i)).toBeVisible();
+    expect(screen.getByText(/conteúdos.*serão removidos/i)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Confirmar exclusão" }));
 
     await waitFor(() => expect(screen.queryByText("Matemática")).not.toBeInTheDocument());

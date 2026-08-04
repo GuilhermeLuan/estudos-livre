@@ -46,6 +46,13 @@ test("uses the study rail for an authenticated desktop session", async ({ page }
   await expect(page.getByRole("heading", { name: "Minhas matérias" })).toBeVisible();
   await expect(page.getByText("Língua Portuguesa")).toBeVisible();
   await expect(page.getByRole("link", { name: "Matérias" }).first()).toHaveAttribute("aria-current", "page");
+
+  await page.getByRole("button", { name: "Excluir Língua Portuguesa" }).click();
+  const subjectCopy = await page.locator(".subject-row-copy").boundingBox();
+  const deletePanel = await page.locator(".subject-delete-panel").boundingBox();
+  expect(subjectCopy).not.toBeNull();
+  expect(deletePanel).not.toBeNull();
+  expect(deletePanel!.y).toBeGreaterThan(subjectCopy!.y + subjectCopy!.height);
 });
 
 test("keeps the subject catalog usable without horizontal overflow on a phone", async ({ page }) => {
@@ -71,6 +78,10 @@ test("keeps the subject catalog usable without horizontal overflow on a phone", 
   await expect(page.getByRole("navigation", { name: "Navegação móvel" })).toBeVisible();
   await expect(page.getByRole("complementary", { name: "Navegação principal" })).toBeHidden();
   await expect(page.getByText("Conhecimentos Bancários e Atualidades do Mercado Financeiro")).toBeVisible();
+
+  await page.getByRole("button", { name: "Excluir Conhecimentos Bancários e Atualidades do Mercado Financeiro" }).click();
+  await expect(page.getByText("Excluir “Conhecimentos Bancários e Atualidades do Mercado Financeiro”?"))
+    .toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth
